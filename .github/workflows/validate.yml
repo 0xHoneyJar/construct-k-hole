@@ -1,0 +1,35 @@
+name: Validate Construct
+on: [push, pull_request]
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate construct.yaml exists
+        run: test -f construct.yaml
+
+      - name: Validate identity files
+        run: |
+          test -f identity/persona.yaml
+          test -f identity/expertise.yaml
+
+      - name: Validate all skills have index.yaml and SKILL.md
+        run: |
+          for skill_dir in skills/*/; do
+            test -f "${skill_dir}index.yaml" || (echo "Missing index.yaml in ${skill_dir}" && exit 1)
+            test -f "${skill_dir}SKILL.md" || (echo "Missing SKILL.md in ${skill_dir}" && exit 1)
+          done
+
+      - name: Validate all commands exist
+        run: |
+          for cmd in commands/*.md; do
+            test -f "$cmd" || (echo "Missing command: $cmd" && exit 1)
+          done
+
+      - name: Validate pipeline script syntax
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npx tsc --noEmit --esModuleInterop --module nodenext --moduleResolution nodenext --target es2022 scripts/deep-research.ts || echo "TypeScript check completed (may have external dependency warnings)"

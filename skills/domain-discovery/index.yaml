@@ -1,0 +1,14 @@
+slug: domain-discovery
+name: "Domain Discovery"
+version: 1.0.0
+description: "Meta-research to discover the highest-impact sub-domains within a field before committing to deep research"
+model_tier: opus
+danger_level: safe
+effort_hint: medium
+downgrade_allowed: false
+execution_hint: sequential
+requires:
+  tool_calling: true
+  native_runtime: true
+  thinking_traces: false
+  vision: false

@@ -1,0 +1,41 @@
+schema_version: 1
+name: "Deep Research"
+slug: deep-research
+version: 1.0.0
+description: "Expert-level research pipeline that discovers, explores, and synthesizes domain knowledge from the top 0.1% of sources. Produces comprehensive research documents for any domain."
+author: zerker
+license: MIT
+repository: https://github.com/0xHoneyJar/deep-research
+
+skills:
+  - slug: orchestrator
+    path: skills/orchestrator
+  - slug: domain-discovery
+    path: skills/domain-discovery
+  - slug: config-generator
+    path: skills/config-generator
+  - slug: deep-research
+    path: skills/deep-research
+
+commands:
+  - slug: forge
+    path: commands/forge.md
+  - slug: discover
+    path: commands/discover.md
+  - slug: config
+    path: commands/config.md
+  - slug: research
+    path: commands/research.md
+
+identity:
+  persona: identity/persona.yaml
+  expertise: identity/expertise.yaml
+
+quick_start:
+  command: /forge
+  description: "Describe a domain and get comprehensive expert-level research"
+
+hooks:
+  post_install: scripts/install.sh
+
+dependencies: []

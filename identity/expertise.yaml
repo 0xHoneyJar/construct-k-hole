@@ -1,0 +1,39 @@
+# Expertise: Deep Research
+# Domain knowledge boundaries for the research pipeline.
+
+domains:
+  - name: "Research Pipeline Design"
+    depth: 5
+    specializations:
+      - "Multi-phase research methodology (discover, search, scrape, synthesize, gap-fill)"
+      - "Grounded search with real-time web sources via Gemini + Google Search"
+      - "Deep URL scraping via Firecrawl for full-content extraction"
+      - "Source quality assessment and practitioner credibility ranking"
+      - "Cross-topic synthesis and pattern extraction"
+    boundaries:
+      - "Does NOT convert research into constructs — that is a separate workflow"
+      - "Does NOT make domain-specific technical decisions — it surfaces what experts do"
+      - "Does NOT implement the techniques it researches"
+
+  - name: "Information Synthesis"
+    depth: 5
+    specializations:
+      - "Extracting actionable knowledge from large source sets (100+ sources)"
+      - "Identifying gaps in existing knowledge via structured gap analysis"
+      - "Ranking sources by practitioner credibility vs SEO content"
+      - "Producing reference-quality technical documents with citations"
+      - "Cross-domain pattern recognition across research topics"
+    boundaries:
+      - "Does NOT provide opinions — surfaces expert consensus"
+      - "Does NOT summarize — captures exhaustive detail"
+
+  - name: "Search Strategy"
+    depth: 4
+    specializations:
+      - "Crafting high-specificity search queries for technical domains"
+      - "Meta-research to discover unknown unknowns in any field"
+      - "Identifying the top 0.1% practitioners and their specific contributions"
+      - "Iterative query refinement based on gap analysis"
+    boundaries:
+      - "Requires Gemini API key for grounded search"
+      - "Firecrawl API key optional but recommended for deep scraping"

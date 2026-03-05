@@ -1,0 +1,14 @@
+slug: deep-research
+name: "Deep Research Pipeline"
+version: 1.0.0
+description: "Executes the multi-phase grounded research pipeline — search, scrape, synthesize, gap-fill, final merge"
+model_tier: opus
+danger_level: safe
+effort_hint: large
+downgrade_allowed: false
+execution_hint: sequential
+requires:
+  tool_calling: true
+  native_runtime: true
+  thinking_traces: false
+  vision: false

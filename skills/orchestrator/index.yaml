@@ -1,0 +1,14 @@
+slug: orchestrator
+name: "Research Orchestrator"
+version: 1.0.0
+description: "Master workflow that guides the full research pipeline from domain description to comprehensive output"
+model_tier: opus
+danger_level: safe
+effort_hint: large
+downgrade_allowed: false
+execution_hint: sequential
+requires:
+  tool_calling: true
+  native_runtime: true
+  thinking_traces: false
+  vision: false
