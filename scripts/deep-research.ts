@@ -21,10 +21,14 @@
  *   npx tsx scripts/deep-research.ts --config <name> --concurrency 4
  *   npx tsx scripts/deep-research.ts --config <name> --search-batch 6
  *   npx tsx scripts/deep-research.ts --config <name> --scrape-top 5
+ *   npx tsx scripts/deep-research.ts --config <name> --interactive
+ *   npx tsx scripts/deep-research.ts --config <name> --checkpoint
+ *   npx tsx scripts/deep-research.ts --config <name> --fast
  */
 
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from "fs";
 import { join } from "path";
+import { createInterface } from "readline";
 
 // ─── Config ─────────────────────────────────────────────────────
 
@@ -73,10 +77,123 @@ if (!CONFIG_NAME) {
 }
 
 const SINGLE_TOPIC = getArg("topic");
-const CONCURRENCY = parseInt(getArg("concurrency") || "3", 10);
+const FAST_MODE = process.argv.includes("--fast");
+const CONCURRENCY = parseInt(getArg("concurrency") || (FAST_MODE ? "6" : "3"), 10);
 const DISCOVER_ONLY = process.argv.includes("--discover-only");
-const SEARCH_BATCH_SIZE = parseInt(getArg("search-batch") || "4", 10);
+const INTERACTIVE = process.argv.includes("--interactive");
+const CHECKPOINT = process.argv.includes("--checkpoint");
+const SEARCH_BATCH_SIZE = parseInt(getArg("search-batch") || (FAST_MODE ? "8" : "6"), 10);
 const SCRAPE_TOP_N = parseInt(getArg("scrape-top") || "5", 10);
+const CHECKPOINT_DIR = join(OUTPUT_DIR, ".checkpoints", CONFIG_NAME);
+
+// ─── Resonance Profile ──────────────────────────────────────────
+
+interface ResonanceProfile {
+  keywords: string[];
+  references: string[];
+  touchstones: string[];
+  aesthetic: string;
+}
+
+function loadResonanceProfile(): ResonanceProfile | null {
+  for (const dir of [join(SCRIPT_DIR, ".."), SCRIPT_DIR]) {
+    for (const name of ["resonance-profile.yaml", "resonance-profile.yml", "taste.md"]) {
+      const p = join(dir, name);
+      if (existsSync(p)) {
+        const raw = readFileSync(p, "utf-8");
+        // Simple YAML-like parsing for key: value and lists
+        const profile: ResonanceProfile = { keywords: [], references: [], touchstones: [], aesthetic: "" };
+        let currentKey = "";
+        for (const line of raw.split("\n")) {
+          const keyMatch = line.match(/^(\w+):\s*(.*)$/);
+          if (keyMatch) {
+            currentKey = keyMatch[1];
+            if (keyMatch[2] && !keyMatch[2].startsWith("[")) {
+              if (currentKey === "aesthetic") profile.aesthetic = keyMatch[2].trim();
+            }
+          }
+          const listMatch = line.match(/^\s*-\s+(.+)$/);
+          if (listMatch && currentKey in profile) {
+            const arr = profile[currentKey as keyof ResonanceProfile];
+            if (Array.isArray(arr)) arr.push(listMatch[1].trim());
+          }
+        }
+        // For taste.md, use entire content as aesthetic
+        if (name === "taste.md") {
+          profile.aesthetic = raw;
+        }
+        log("CONFIG", `Loaded resonance profile from ${name}`);
+        return profile;
+      }
+    }
+  }
+  return null;
+}
+
+const RESONANCE = loadResonanceProfile();
+
+function resonanceContext(): string {
+  if (!RESONANCE) return "";
+  const parts: string[] = ["\n## Resonance Profile (weight these connections prominently)"];
+  if (RESONANCE.aesthetic) parts.push(`Aesthetic sensibility: ${RESONANCE.aesthetic}`);
+  if (RESONANCE.keywords.length) parts.push(`Keywords that resonate: ${RESONANCE.keywords.join(", ")}`);
+  if (RESONANCE.references.length) parts.push(`Reference works: ${RESONANCE.references.join(", ")}`);
+  if (RESONANCE.touchstones.length) parts.push(`Domain touchstones: ${RESONANCE.touchstones.join(", ")}`);
+  parts.push("Surface findings that connect to these aesthetic/conceptual anchors. Weight resonant connections prominently in the synthesis.");
+  return parts.join("\n");
+}
+
+// ─── Interactive Prompt ──────────────────────────────────────────
+
+async function prompt(question: string): Promise<string> {
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  return new Promise((resolve) => {
+    rl.question(question, (answer) => {
+      rl.close();
+      resolve(answer.trim());
+    });
+  });
+}
+
+async function interactiveCheckpoint(phase: string, summary: string): Promise<{ action: "continue" | "skip" | "add"; extra?: string }> {
+  if (!INTERACTIVE) return { action: "continue" };
+
+  console.log(`\n${"─".repeat(60)}`);
+  console.log(`  CHECKPOINT: ${phase}`);
+  console.log(`${"─".repeat(60)}`);
+  console.log(summary);
+  console.log(`\nOptions:`);
+  console.log(`  [enter]  Continue to next phase`);
+  console.log(`  s        Skip remaining topics`);
+  console.log(`  a        Add a follow-up query (go deeper on something)`);
+  console.log(`${"─".repeat(60)}`);
+
+  const answer = await prompt("→ ");
+
+  if (answer.toLowerCase() === "s") return { action: "skip" };
+  if (answer.toLowerCase().startsWith("a")) {
+    const extra = answer.length > 2 ? answer.slice(2).trim() : await prompt("What to explore deeper? → ");
+    return { action: "add", extra };
+  }
+  return { action: "continue" };
+}
+
+// ─── Checkpoint Save/Resume ──────────────────────────────────────
+
+function saveCheckpoint(topicId: string, data: unknown) {
+  if (!CHECKPOINT) return;
+  mkdirSync(CHECKPOINT_DIR, { recursive: true });
+  writeFileSync(join(CHECKPOINT_DIR, `${topicId}.json`), JSON.stringify(data, null, 2));
+  log("CKPT", `Saved checkpoint for ${topicId}`);
+}
+
+function loadCheckpoint(topicId: string): unknown | null {
+  if (!CHECKPOINT) return null;
+  const p = join(CHECKPOINT_DIR, `${topicId}.json`);
+  if (!existsSync(p)) return null;
+  log("CKPT", `Resuming ${topicId} from checkpoint`);
+  return JSON.parse(readFileSync(p, "utf-8"));
+}
 
 // ─── Load Research Config ───────────────────────────────────────
 
@@ -341,6 +458,7 @@ async function runDiscovery(config: ResearchConfig): Promise<string> {
 
 ## Context
 ${config.SYNTHESIS_CONTEXT}
+${resonanceContext()}
 
 ## Your Task
 Based on the research findings below, identify and rank the **6-8 most impactful research domains** for building deep expertise in this field.
@@ -459,6 +577,7 @@ Your goal is to capture the COMPLETE mental model that the top 0.1% of practitio
 
 ## Context
 ${context}
+${resonanceContext()}
 
 ## Research Topic: ${topic.name}
 Focus areas: ${topic.focusAreas.join(", ")}
@@ -564,6 +683,7 @@ It must be so thorough that someone reading ONLY this document could replicate e
 
 ## Context
 ${context}
+${resonanceContext()}
 
 ## First Round Synthesis
 ${firstSynthesis}
@@ -608,6 +728,13 @@ Length is correct — completeness is the goal.`;
 }
 
 async function researchTopic(topic: Topic, context: string): Promise<string> {
+  // Check for existing checkpoint
+  const cached = loadCheckpoint(topic.id) as { final?: string } | null;
+  if (cached?.final) {
+    log("CKPT", `${topic.id} — using cached result (${cached.final.length} chars)`);
+    return cached.final;
+  }
+
   const topicStart = Date.now();
   log("START", `${topic.id}: ${topic.name}`);
 
@@ -615,14 +742,33 @@ async function researchTopic(topic: Topic, context: string): Promise<string> {
   const { findings, allSources } = await groundedSearch(topic);
 
   // Stage 2: Deep scrape top sources (if Firecrawl available)
+  // Run in parallel with nothing blocking — scrapeTopSources is independent after search
   const scraped = await scrapeTopSources(allSources, SCRAPE_TOP_N);
 
   // Stage 3: First synthesis
   const synthesis = await synthesize(topic, findings, allSources, scraped, context);
 
+  // Interactive checkpoint after first synthesis
+  const checkpoint = await interactiveCheckpoint(
+    `${topic.name} — First Synthesis`,
+    `${synthesis.slice(0, 800)}...\n\n[${allSources.length} sources found, ${findings.length} search results]`,
+  );
+
+  if (checkpoint.action === "skip") {
+    log("SKIP", `${topic.id} — user skipped gap-fill`);
+    saveCheckpoint(topic.id, { final: synthesis });
+    return synthesis;
+  }
+
   // Stage 4: Gap analysis
   const gapQueries = await gapAnalysis(topic, synthesis);
   log("GAPS", `${topic.id} — ${gapQueries.length} gaps found`);
+
+  // If user wants to add a query, inject it
+  if (checkpoint.action === "add" && checkpoint.extra) {
+    gapQueries.push(checkpoint.extra);
+    log("ADD", `${topic.id} — added user query: ${checkpoint.extra.slice(0, 60)}`);
+  }
 
   // Stage 5: Fill gaps
   log("FILL", `${topic.id} — ${gapQueries.length} gap queries`);
@@ -630,6 +776,8 @@ async function researchTopic(topic: Topic, context: string): Promise<string> {
 
   // Stage 6: Final synthesis
   const final = await finalSynthesis(topic, synthesis, gapFindings, context);
+
+  saveCheckpoint(topic.id, { final });
 
   const elapsed = ((Date.now() - topicStart) / 1000).toFixed(0);
   log("DONE", `${topic.id} — ${elapsed}s, ${final.length} chars`);
@@ -648,7 +796,9 @@ async function main() {
   console.log(`  ${timestamp} | Model: ${MODEL}`);
   console.log(`  Search: Gemini + Google Search grounding`);
   console.log(`  Scraping: ${HAS_FIRECRAWL ? `Firecrawl (top ${SCRAPE_TOP_N} URLs/topic)` : "Disabled (no FIRECRAWL_API_KEY)"}`);
-  console.log(`  Concurrency: ${CONCURRENCY} topics | ${SEARCH_BATCH_SIZE} queries`);
+  console.log(`  Concurrency: ${CONCURRENCY} topics | ${SEARCH_BATCH_SIZE} queries${FAST_MODE ? " (fast mode)" : ""}`);
+  console.log(`  Interactive: ${INTERACTIVE ? "ON" : "OFF"} | Checkpoint: ${CHECKPOINT ? "ON" : "OFF"}`);
+  if (RESONANCE) console.log(`  Resonance: loaded (${RESONANCE.keywords.length} keywords, ${RESONANCE.references.length} refs)`);
   console.log(`${"=".repeat(60)}\n`);
 
   // Phase 1: Discovery
@@ -660,8 +810,19 @@ async function main() {
     return;
   }
 
+  // Interactive checkpoint after discovery
+  const discoveryCheckpoint = await interactiveCheckpoint(
+    "Discovery Complete",
+    `Discovery saved to ${discoveryPath}\nTopics configured: ${config.TOPICS.map((t) => t.id).join(", ")}\n\nReady to start deep research on ${config.TOPICS.length} topics.`,
+  );
+
+  if (discoveryCheckpoint.action === "skip") {
+    console.log("\nStopping after discovery (user choice).");
+    return;
+  }
+
   // Phase 2: Deep research on all topics (in parallel)
-  const topicsToRun = SINGLE_TOPIC
+  let topicsToRun = SINGLE_TOPIC
     ? config.TOPICS.filter((t) => t.id === SINGLE_TOPIC)
     : config.TOPICS;
 
