@@ -46,16 +46,10 @@ The user provides a phrase, concept, or question to explore. This can be:
 
 ### Step 2: Execute Focused Search
 
-Run the research script in dig mode:
-
-```bash
-npx tsx scripts/deep-research.ts --config _dig --dig "<query>"
-```
-
-Or if no script support, execute directly:
-1. Run 2-3 highly targeted grounded searches via Gemini + Google Search
-2. Focus on practitioner content, not tutorials
-3. Look for unexpected connections and adjacent domains
+Run 2-3 highly targeted grounded searches via Gemini + Google Search:
+1. Focus on practitioner content, not tutorials
+2. Look for unexpected connections and adjacent domains
+3. Use the Gemini API directly (grounded search) rather than the batch pipeline
 
 ### Step 3: Synthesize with Resonance
 

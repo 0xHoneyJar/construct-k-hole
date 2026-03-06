@@ -26,8 +26,8 @@
  *   npx tsx scripts/deep-research.ts --config <name> --fast
  */
 
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from "fs";
-import { join } from "path";
+import { readFileSync, writeFileSync, mkdirSync, existsSync, renameSync, rmSync } from "fs";
+import { join, basename } from "path";
 import { createInterface } from "readline";
 
 // ─── Config ─────────────────────────────────────────────────────
@@ -44,7 +44,7 @@ for (const envDir of [join(SCRIPT_DIR, ".."), SCRIPT_DIR]) {
       const match = line.match(/^(\w+)=(.*)$/);
       if (match && !process.env[match[1]]) {
         // Strip wrapping quotes — .env files commonly use KEY="value" format
-        process.env[match[1]] = match[2].trim().replace(/^["']|["']$/, "");
+        process.env[match[1]] = match[2].trim().replace(/^["']|["']$/g, "");
       }
     }
   }
@@ -78,11 +78,21 @@ if (!CONFIG_NAME) {
 
 const SINGLE_TOPIC = getArg("topic");
 const FAST_MODE = process.argv.includes("--fast");
-const CONCURRENCY = parseInt(getArg("concurrency") || (FAST_MODE ? "6" : "3"), 10);
 const DISCOVER_ONLY = process.argv.includes("--discover-only");
 const INTERACTIVE = process.argv.includes("--interactive");
 const CHECKPOINT = process.argv.includes("--checkpoint");
+const CLEAR_CHECKPOINTS = process.argv.includes("--clear-checkpoints");
 const SEARCH_BATCH_SIZE = parseInt(getArg("search-batch") || (FAST_MODE ? "8" : "6"), 10);
+
+// Interactive mode forces concurrency=1 to avoid stdin contention
+const CONCURRENCY = INTERACTIVE
+  ? 1
+  : parseInt(getArg("concurrency") || (FAST_MODE ? "6" : "3"), 10);
+
+if (INTERACTIVE && !process.stdin.isTTY) {
+  console.error("Error: --interactive requires a TTY (cannot be piped or run in CI)");
+  process.exit(1);
+}
 const SCRAPE_TOP_N = parseInt(getArg("scrape-top") || "5", 10);
 const CHECKPOINT_DIR = join(OUTPUT_DIR, ".checkpoints", CONFIG_NAME);
 
@@ -95,35 +105,44 @@ interface ResonanceProfile {
   aesthetic: string;
 }
 
+const MAX_RESONANCE_SIZE = 50_000; // 50KB cap on resonance profile
+
 function loadResonanceProfile(): ResonanceProfile | null {
   for (const dir of [join(SCRIPT_DIR, ".."), SCRIPT_DIR]) {
     for (const name of ["resonance-profile.yaml", "resonance-profile.yml", "taste.md"]) {
       const p = join(dir, name);
-      if (existsSync(p)) {
-        const raw = readFileSync(p, "utf-8");
-        // Simple YAML-like parsing for key: value and lists
+      if (!existsSync(p)) continue;
+      try {
+        const raw = readFileSync(p, "utf-8").slice(0, MAX_RESONANCE_SIZE);
+        // Simple YAML-like parser — supports: key: value, - list items, # comments
         const profile: ResonanceProfile = { keywords: [], references: [], touchstones: [], aesthetic: "" };
+        const validKeys = new Set<string>(["keywords", "references", "touchstones", "aesthetic"]);
         let currentKey = "";
         for (const line of raw.split("\n")) {
+          const trimmed = line.trim();
+          if (!trimmed || trimmed.startsWith("#")) continue;
           const keyMatch = line.match(/^(\w+):\s*(.*)$/);
           if (keyMatch) {
-            currentKey = keyMatch[1];
-            if (keyMatch[2] && !keyMatch[2].startsWith("[")) {
-              if (currentKey === "aesthetic") profile.aesthetic = keyMatch[2].trim();
+            currentKey = validKeys.has(keyMatch[1]) ? keyMatch[1] : "";
+            if (currentKey === "aesthetic" && keyMatch[2]) {
+              profile.aesthetic = keyMatch[2].trim().replace(/^["']|["']$/g, "");
             }
+            continue;
           }
           const listMatch = line.match(/^\s*-\s+(.+)$/);
-          if (listMatch && currentKey in profile) {
-            const arr = profile[currentKey as keyof ResonanceProfile];
-            if (Array.isArray(arr)) arr.push(listMatch[1].trim());
+          if (listMatch && currentKey && currentKey !== "aesthetic") {
+            const value = listMatch[1].trim().replace(/^["']|["']$/g, "");
+            (profile[currentKey as "keywords" | "references" | "touchstones"]).push(value);
           }
         }
-        // For taste.md, use entire content as aesthetic
+        // For taste.md, use entire content as aesthetic (capped)
         if (name === "taste.md") {
-          profile.aesthetic = raw;
+          profile.aesthetic = raw.slice(0, 2000);
         }
         log("CONFIG", `Loaded resonance profile from ${name}`);
         return profile;
+      } catch (err) {
+        log("WARN", `Failed to load resonance profile ${name}: ${String(err).slice(0, 100)}`);
       }
     }
   }
@@ -180,19 +199,40 @@ async function interactiveCheckpoint(phase: string, summary: string): Promise<{ 
 
 // ─── Checkpoint Save/Resume ──────────────────────────────────────
 
+function sanitizeId(id: string): string {
+  return basename(id).replace(/[^a-zA-Z0-9_-]/g, "_");
+}
+
 function saveCheckpoint(topicId: string, data: unknown) {
   if (!CHECKPOINT) return;
   mkdirSync(CHECKPOINT_DIR, { recursive: true });
-  writeFileSync(join(CHECKPOINT_DIR, `${topicId}.json`), JSON.stringify(data, null, 2));
+  const target = join(CHECKPOINT_DIR, `${sanitizeId(topicId)}.json`);
+  const tmp = `${target}.tmp`;
+  writeFileSync(tmp, JSON.stringify(data, null, 2));
+  renameSync(tmp, target); // atomic on most filesystems
   log("CKPT", `Saved checkpoint for ${topicId}`);
 }
 
-function loadCheckpoint(topicId: string): unknown | null {
+function loadCheckpoint(topicId: string): Record<string, unknown> | null {
   if (!CHECKPOINT) return null;
-  const p = join(CHECKPOINT_DIR, `${topicId}.json`);
+  const p = join(CHECKPOINT_DIR, `${sanitizeId(topicId)}.json`);
   if (!existsSync(p)) return null;
-  log("CKPT", `Resuming ${topicId} from checkpoint`);
-  return JSON.parse(readFileSync(p, "utf-8"));
+  try {
+    const data = JSON.parse(readFileSync(p, "utf-8"));
+    log("CKPT", `Resuming ${topicId} from checkpoint`);
+    return data;
+  } catch {
+    log("WARN", `Corrupt checkpoint for ${topicId} — deleting and re-running`);
+    try { rmSync(p); } catch { /* ignore cleanup failure */ }
+    return null;
+  }
+}
+
+function clearCheckpoints() {
+  if (existsSync(CHECKPOINT_DIR)) {
+    rmSync(CHECKPOINT_DIR, { recursive: true });
+    log("CKPT", `Cleared checkpoints for ${CONFIG_NAME}`);
+  }
 }
 
 // ─── Load Research Config ───────────────────────────────────────
@@ -742,7 +782,6 @@ async function researchTopic(topic: Topic, context: string): Promise<string> {
   const { findings, allSources } = await groundedSearch(topic);
 
   // Stage 2: Deep scrape top sources (if Firecrawl available)
-  // Run in parallel with nothing blocking — scrapeTopSources is independent after search
   const scraped = await scrapeTopSources(allSources, SCRAPE_TOP_N);
 
   // Stage 3: First synthesis
@@ -788,6 +827,11 @@ async function researchTopic(topic: Topic, context: string): Promise<string> {
 // ─── Main ───────────────────────────────────────────────────────
 
 async function main() {
+  if (CLEAR_CHECKPOINTS) {
+    clearCheckpoints();
+    if (DISCOVER_ONLY || (!getArg("config"))) return;
+  }
+
   const config = await loadConfig();
   const timestamp = new Date().toISOString().slice(0, 10);
 
@@ -810,10 +854,10 @@ async function main() {
     return;
   }
 
-  // Interactive checkpoint after discovery
+  // Interactive checkpoint after discovery — user can skip or note a direction to explore
   const discoveryCheckpoint = await interactiveCheckpoint(
     "Discovery Complete",
-    `Discovery saved to ${discoveryPath}\nTopics configured: ${config.TOPICS.map((t) => t.id).join(", ")}\n\nReady to start deep research on ${config.TOPICS.length} topics.`,
+    `Discovery saved to ${discoveryPath}\nTopics configured: ${config.TOPICS.map((t) => t.id).join(", ")}\n\nReady to start deep research on ${config.TOPICS.length} topics.\n\nTip: use "a <query>" to add an extra exploration direction to all topics.`,
   );
 
   if (discoveryCheckpoint.action === "skip") {
@@ -821,8 +865,16 @@ async function main() {
     return;
   }
 
+  // If user added a direction at discovery, inject it into all topics' search queries
+  if (discoveryCheckpoint.action === "add" && discoveryCheckpoint.extra) {
+    for (const topic of config.TOPICS) {
+      topic.searchQueries.push(discoveryCheckpoint.extra);
+    }
+    log("ADD", `Injected user query into all ${config.TOPICS.length} topics: ${discoveryCheckpoint.extra.slice(0, 60)}`);
+  }
+
   // Phase 2: Deep research on all topics (in parallel)
-  let topicsToRun = SINGLE_TOPIC
+  const topicsToRun = SINGLE_TOPIC
     ? config.TOPICS.filter((t) => t.id === SINGLE_TOPIC)
     : config.TOPICS;
 
