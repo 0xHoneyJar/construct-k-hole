@@ -39,7 +39,8 @@ for (const envDir of [join(SCRIPT_DIR, ".."), SCRIPT_DIR]) {
     for (const line of readFileSync(envPath, "utf-8").split("\n")) {
       const match = line.match(/^(\w+)=(.*)$/);
       if (match && !process.env[match[1]]) {
-        process.env[match[1]] = match[2].trim().replace(/^["']|["']$/g, "");
+        // Strip wrapping quotes — .env files commonly use KEY="value" format
+        process.env[match[1]] = match[2].trim().replace(/^["']|["']$/, "");
       }
     }
   }
