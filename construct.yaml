@@ -16,6 +16,8 @@ skills:
     path: skills/config-generator
   - slug: deep-research
     path: skills/deep-research
+  - slug: dig
+    path: skills/dig
 
 commands:
   - slug: forge
@@ -26,6 +28,8 @@ commands:
     path: commands/config.md
   - slug: research
     path: commands/research.md
+  - slug: dig
+    path: commands/dig.md
 
 identity:
   persona: identity/persona.yaml

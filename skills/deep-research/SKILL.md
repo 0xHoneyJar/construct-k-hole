@@ -22,6 +22,9 @@ Executes the full multi-phase research pipeline using a config file. This is the
 /research --config animation --discover-only    # Discovery phase only
 /research --config animation --topic spring-physics  # Single topic
 /research --config animation --concurrency 4    # Parallel topics
+/research --config animation --fast             # Max parallelism (concurrency 6, batch 8)
+/research --config animation --interactive      # Pause between phases for steering
+/research --config animation --checkpoint       # Save/resume state per topic
 ```
 
 ## Pipeline Architecture

@@ -1,0 +1,29 @@
+# Resonance Profile — Creative Research Weighting
+#
+# This file tells the research pipeline what aesthetic and conceptual
+# anchors matter to you. Findings that connect to these will be
+# surfaced prominently in synthesis.
+#
+# Place as resonance-profile.yaml in the project root or scripts/ directory.
+
+# Keywords that resonate with your aesthetic sensibility
+keywords:
+  - loneliness as design
+  - collective consequence
+  - phosphor decay
+  - spatial memory
+
+# Reference works that anchor your taste
+references:
+  - Dark Souls
+  - Neuromancer
+  - Wabi-sabi
+
+# Domain touchstones — concepts you keep returning to
+touchstones:
+  - game mechanics as emotional language
+  - decay and impermanence in interfaces
+  - constraint as creative catalyst
+
+# Free-form aesthetic description
+aesthetic: Minimalist, melancholic, systems-driven. Interested in how designed systems create emergent emotional experiences.
