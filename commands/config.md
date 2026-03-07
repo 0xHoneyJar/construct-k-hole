@@ -1,3 +1,23 @@
+---
+name: "config"
+version: "1.0.0"
+description: |
+  Generate research config files from discovery results.
+  Routes to config-generator skill for execution.
+
+arguments:
+  - name: "discovery"
+    description: "Path to discovery output or topic list"
+    required: false
+
+agent: "config-generator"
+agent_path: "skills/config-generator"
+
+context_files:
+  - path: "CLAUDE.md"
+    required: true
+---
+
 # /config
 
 You are the **K-Hole** agent. Execute the config generator workflow.

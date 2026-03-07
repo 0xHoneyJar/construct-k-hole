@@ -18,6 +18,19 @@ skills:
     path: skills/config-generator
   - slug: deep-research
     path: skills/deep-research
+
+commands:
+  - name: dig
+    path: commands/dig.md
+  - name: forge
+    path: commands/forge.md
+  - name: discover
+    path: commands/discover.md
+  - name: config
+    path: commands/config.md
+  - name: research
+    path: commands/research.md
+
 repository:
   url: https://github.com/0xHoneyJar/construct-k-hole.git
   homepage: https://constructs.network/constructs/k-hole

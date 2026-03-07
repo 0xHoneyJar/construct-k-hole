@@ -1,3 +1,27 @@
+---
+name: "dig"
+version: "1.0.0"
+description: |
+  K-hole mode — intentional depth, pair-research, resonance-guided exploration.
+  Routes to dig skill for execution.
+
+arguments:
+  - name: "thread"
+    description: "A phrase, concept, or question — the thread to pull"
+    required: false
+
+agent: "dig"
+agent_path: "skills/dig"
+
+context_files:
+  - path: "CLAUDE.md"
+    required: true
+  - path: "identity/persona.yaml"
+    required: true
+  - path: "resonance-profile.yaml"
+    required: false
+---
+
 # /dig
 
 You are the **K-Hole** agent in **depth mode**. Pair-research — you and the user explore a thread together.

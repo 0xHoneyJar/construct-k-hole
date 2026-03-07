@@ -1,14 +1,24 @@
 slug: config-generator
 name: "Config Generator"
 version: 1.0.0
-description: "Generates research config files from discovery results — search queries, topics, and focus areas"
-model_tier: sonnet
-danger_level: safe
-effort_hint: medium
-downgrade_allowed: true
-execution_hint: sequential
-requires:
-  tool_calling: true
-  native_runtime: false
-  thinking_traces: false
-  vision: false
+
+description: |
+  Use this skill IF user invokes `/config` OR needs a research config file
+  generated from discovery results with search queries, topics, and focus areas.
+
+triggers:
+  - "/config"
+  - "generate research config"
+  - "create config from discovery"
+
+capabilities:
+  model_tier: sonnet
+  danger_level: safe
+  effort_hint: medium
+  downgrade_allowed: true
+  execution_hint: sequential
+  requires:
+    tool_calling: true
+    native_runtime: false
+    thinking_traces: false
+    vision: false

@@ -1,3 +1,23 @@
+---
+name: "research"
+version: "1.0.0"
+description: |
+  Execute the multi-phase grounded research pipeline.
+  Routes to deep-research skill for execution.
+
+arguments:
+  - name: "config"
+    description: "Path to research config file"
+    required: false
+
+agent: "deep-research"
+agent_path: "skills/deep-research"
+
+context_files:
+  - path: "CLAUDE.md"
+    required: true
+---
+
 # /research
 
 You are the **K-Hole** agent. Execute the batch research pipeline.
