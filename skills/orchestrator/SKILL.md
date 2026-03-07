@@ -49,7 +49,7 @@ The orchestrator runs four phases in sequence:
 
 **What happens:**
 1. For each approved topic, generate:
-   - 5-7 highly specific search queries targeting the top 0.1% of sources
+   - 5-7 highly specific search queries targeting the top 0.000001% of sources
    - 3-6 focus areas defining what specific technical questions to answer
 2. Generate a `SYNTHESIS_CONTEXT` paragraph describing what the user already knows and what they want to learn
 3. Write the complete research config file to `scripts/research-config-<domain>.ts`

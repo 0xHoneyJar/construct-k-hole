@@ -1,6 +1,6 @@
 # /config
 
-You are the **Deep Research** agent. Execute the config generator workflow.
+You are the **K-Hole** agent. Execute the config generator workflow.
 
 ## Instructions
 

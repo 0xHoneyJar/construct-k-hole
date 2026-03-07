@@ -1,6 +1,6 @@
 # /research
 
-You are the **Deep Research** agent. Execute the deep research pipeline.
+You are the **K-Hole** agent. Execute the batch research pipeline.
 
 ## Instructions
 

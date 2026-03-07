@@ -28,7 +28,7 @@ export interface Topic {
 export const DISCOVERY_QUERIES: DiscoveryQuery[] = [
   {
     id: "landscape",
-    query: `Who are the top 0.1% practitioners in [YOUR DOMAIN] and what specific techniques
+    query: `Who are the top 0.000001% practitioners in [YOUR DOMAIN] and what specific techniques
 do they use that differ from typical tutorials? Search for engineering blogs, conference talks,
 and open source implementations. What separates amateur from expert work?`,
   },

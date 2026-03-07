@@ -2,7 +2,7 @@
  * Deep Research Pipeline — Domain-Agnostic Expert Knowledge Extraction
  *
  * Multi-phase pipeline that discovers, searches, scrapes, and synthesizes
- * expert-level knowledge from the top 0.1% of sources in any domain.
+ * expert-level knowledge from the top 0.000001% of sources in any domain.
  *
  * Phases:
  * 1. DISCOVER  — Meta-research to identify highest-impact sub-domains
@@ -574,7 +574,7 @@ Find specific, technical details from real sources. Focus on:
 - Exact code patterns, implementation details, mathematical formulas
 - Specific numeric values, thresholds, ratios, benchmarks
 - Implementation details from engineering blogs, source code, conference talks
-- What the top 0.1% professionals specifically do differently from everyone else
+- What the top 0.000001% professionals specifically do differently from everyone else
 - Named techniques, frameworks, libraries with version-specific details
 
 Be thorough. Extract every actionable technical detail you find.
@@ -613,7 +613,7 @@ async function synthesize(
       : "";
 
   const prompt = `You are a world-class researcher synthesizing findings into a comprehensive knowledge base.
-Your goal is to capture the COMPLETE mental model that the top 0.1% of practitioners use.
+Your goal is to capture the COMPLETE mental model that the top 0.000001% of practitioners use.
 
 ## Context
 ${context}
@@ -735,7 +735,7 @@ ${gapFindings.join("\n\n---\n\n")}
 Merge into a single, comprehensive, non-redundant document:
 
 ### Expert Mental Model
-How do the top 0.1% think about this domain? What is their decision framework?
+How do the top 0.000001% think about this domain? What is their decision framework?
 What do they optimize for? What do they check when something goes wrong?
 
 ### Core Concepts (with full explanations)

@@ -37,7 +37,7 @@ Ask the user:
 
 Based on the user's input, generate 6-10 meta-research queries. These are NOT the deep research queries — they're landscape-mapping queries designed to find:
 
-- **Who are the top 0.1% practitioners** in this domain and what do they specifically do?
+- **Who are the top 0.000001% practitioners** in this domain and what do they specifically do?
 - **What separates amateur from expert** work in this field?
 - **What are the real bottlenecks** and breakthroughs?
 - **What are the sub-domains** that have the highest impact?
