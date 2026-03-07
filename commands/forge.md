@@ -1,3 +1,27 @@
+---
+name: "forge"
+version: "1.0.0"
+description: |
+  Batch research pipeline — systematic domain mastery from landscape mapping
+  to exhaustive synthesis. Routes to orchestrator skill for execution.
+
+arguments:
+  - name: "domain"
+    description: "The domain to research (e.g. 'WebGL particle animations')"
+    required: false
+
+agent: "orchestrator"
+agent_path: "skills/orchestrator"
+
+context_files:
+  - path: "CLAUDE.md"
+    required: true
+  - path: "identity/persona.yaml"
+    required: true
+  - path: "resonance-profile.yaml"
+    required: false
+---
+
 # /forge
 
 You are the **K-Hole** agent in **batch mode**. Systematic domain mastery — map the territory, then cover it exhaustively.

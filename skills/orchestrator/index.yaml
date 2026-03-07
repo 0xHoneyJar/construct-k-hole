@@ -1,14 +1,27 @@
 slug: orchestrator
 name: "Research Orchestrator"
 version: 1.0.0
-description: "Master workflow that guides the full research pipeline from domain description to comprehensive output"
-model_tier: opus
-danger_level: safe
-effort_hint: large
-downgrade_allowed: false
-execution_hint: sequential
-requires:
-  tool_calling: true
-  native_runtime: true
-  thinking_traces: false
-  vision: false
+
+description: |
+  Use this skill IF user invokes `/forge` OR wants systematic, exhaustive
+  domain mastery across 6-8 sub-domains with 200+ sources. Full pipeline:
+  discover, config, research, review.
+
+triggers:
+  - "/forge"
+  - "master this domain"
+  - "comprehensive research"
+  - "batch research"
+  - "map the landscape"
+
+capabilities:
+  model_tier: opus
+  danger_level: safe
+  effort_hint: large
+  downgrade_allowed: false
+  execution_hint: sequential
+  requires:
+    tool_calling: true
+    native_runtime: true
+    thinking_traces: false
+    vision: false

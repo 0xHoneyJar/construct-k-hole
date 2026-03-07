@@ -1,14 +1,27 @@
 slug: dig
 name: "K-Hole"
 version: 1.0.0
-description: "Interactive, iterative deep-dive into a single research thread — pair-research, not delegated-research"
-model_tier: sonnet
-danger_level: safe
-effort_hint: medium
-downgrade_allowed: true
-execution_hint: sequential
-requires:
-  tool_calling: true
-  native_runtime: false
-  thinking_traces: false
-  vision: false
+
+description: |
+  Use this skill IF user invokes `/dig` OR wants interactive, iterative
+  pair-research on a single thread. Resonance-guided depth exploration.
+
+triggers:
+  - "/dig"
+  - "go deep on"
+  - "research this"
+  - "pull this thread"
+  - "explore this topic"
+  - "k-hole"
+
+capabilities:
+  model_tier: sonnet
+  danger_level: safe
+  effort_hint: medium
+  downgrade_allowed: true
+  execution_hint: sequential
+  requires:
+    tool_calling: true
+    native_runtime: false
+    thinking_traces: false
+    vision: false

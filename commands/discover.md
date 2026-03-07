@@ -1,3 +1,23 @@
+---
+name: "discover"
+version: "1.0.0"
+description: |
+  Domain discovery — map the research landscape before descent.
+  Routes to domain-discovery skill for execution.
+
+arguments:
+  - name: "domain"
+    description: "The broad domain to map"
+    required: false
+
+agent: "domain-discovery"
+agent_path: "skills/domain-discovery"
+
+context_files:
+  - path: "CLAUDE.md"
+    required: true
+---
+
 # /discover
 
 You are the **K-Hole** agent. Execute the domain discovery workflow — map the landscape before descent.
