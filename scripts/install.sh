@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
-# Post-install hook for the Deep Research construct
+# Post-install hook for the K-Hole construct
 set -euo pipefail
 
-# Create output directory
-mkdir -p scripts/research-output
+CONSTRUCT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+# Create output directory (relative to construct root, not CWD)
+mkdir -p "$CONSTRUCT_DIR/scripts/research-output"
 
 # Check for required API keys
 if [ -f .env ]; then
@@ -29,10 +31,13 @@ else
 fi
 
 echo ""
-echo "  Deep Research construct installed successfully"
+echo "  K-Hole construct installed"
 echo ""
-echo "  Quick start:"
-echo "    /forge \"your domain\"     Full pipeline"
-echo "    /discover \"domain\"       Discovery only"
-echo "    /config                   Generate research config"
-echo "    /research --config name   Run pipeline with config"
+echo "  Depth modes:"
+echo "    /dig \"your thread\"        Interactive pair-research (k-hole mode)"
+echo "    /forge \"your domain\"      Full batch pipeline"
+echo ""
+echo "  Pipeline steps:"
+echo "    /discover \"domain\"        Map the landscape"
+echo "    /config                    Generate research config"
+echo "    /research --config name    Execute the pipeline"

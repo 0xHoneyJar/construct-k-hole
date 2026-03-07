@@ -1,13 +1,15 @@
-schema_version: 1
-name: "Deep Research"
-slug: deep-research
-version: 1.0.0
-description: "Expert-level research pipeline that discovers, explores, and synthesizes domain knowledge from the top 0.1% of sources. Produces comprehensive research documents for any domain."
-author: zerker
+schema_version: 3
+name: K-Hole
+slug: k-hole
+version: 1.1.0
+description: Depth engine for intentional exploration. Discovers, descends, and synthesizes domain knowledge from the top 0.1% of sources. Depth over breadth, always.
+author: 0xHoneyJar
 license: MIT
-repository: https://github.com/0xHoneyJar/deep-research
-
 skills:
+  # Interactive depth (primary)
+  - slug: dig
+    path: skills/dig
+  # Batch research pipeline
   - slug: orchestrator
     path: skills/orchestrator
   - slug: domain-discovery
@@ -16,30 +18,41 @@ skills:
     path: skills/config-generator
   - slug: deep-research
     path: skills/deep-research
-  - slug: dig
-    path: skills/dig
-
-commands:
-  - slug: forge
-    path: commands/forge.md
-  - slug: discover
-    path: commands/discover.md
-  - slug: config
-    path: commands/config.md
-  - slug: research
-    path: commands/research.md
-  - slug: dig
-    path: commands/dig.md
-
+repository:
+  url: https://github.com/0xHoneyJar/construct-k-hole.git
+  homepage: https://constructs.network/constructs/k-hole
+events:
+  emits:
+    - type: forge.k-hole.descent_started
+      description: Emitted when a k-hole research session begins
+      data_schema:
+        domain: string
+        mode: string
+    - type: forge.k-hole.thread_pulled
+      description: Emitted when user follows a pull thread in /dig
+      data_schema:
+        thread_id: string
+        depth: number
+        query: string
+    - type: forge.k-hole.emergence_complete
+      description: Emitted when final synthesis is complete and user surfaces
+      data_schema:
+        domain: string
+        topic_count: number
+        output_path: string
+    - type: forge.k-hole.resonance_detected
+      description: Emitted when a finding matches the active resonance profile
+      data_schema:
+        topic: string
+        anchor: string
+        excerpt: string
+  consumes: []
+pack_dependencies: []
 identity:
   persona: identity/persona.yaml
   expertise: identity/expertise.yaml
-
-quick_start:
-  command: /forge
-  description: "Describe a domain and get comprehensive expert-level research"
-
 hooks:
   post_install: scripts/install.sh
-
-dependencies: []
+quick_start:
+  command: /dig
+  description: Give it a thread worth pulling -- it goes deep

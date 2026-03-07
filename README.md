@@ -1,76 +1,82 @@
-# Deep Research
+# K-Hole
 
-> Expert-level research pipeline that discovers, explores, and synthesizes domain knowledge from the top 0.1% of sources. Produces comprehensive research documents for any domain.
+A depth engine. Give it a thread worth pulling — it goes deep.
 
-## What It Does
+> **k-hole** (constructive sense): intentional descent into a domain, chosen because the depth itself is the reward. not a rabbit hole — those are accidental. a k-hole is deliberate.
 
-Deep Research is a construct that packages a multi-phase research pipeline. Give it a domain you want to master, and it will:
+## Two Modes
 
-1. **Discover** the landscape — who are the top practitioners, what are the key sub-domains, what separates amateurs from experts
-2. **Generate** a research config with hyper-specific search queries and focus areas
-3. **Execute** deep research — grounded search via Gemini + Google Search, optional deep scraping via Firecrawl, multi-round synthesis with gap analysis
-4. **Synthesize** findings into comprehensive, actionable reference documents
+### /dig — Pair-Research (the k-hole)
 
-The output is designed for depth, not speed. Each topic goes through grounded search, first-pass synthesis, gap analysis, gap-fill search, and final exhaustive synthesis. The result is the kind of knowledge dump you'd get from interviewing the top 0.1% of practitioners.
+Interactive, iterative deep-dive into a single thread. You and the agent explore together in real-time, going deeper with each exchange. Each dig surfaces pull threads — specific sub-topics worth following further.
 
-## Quick Start
-
-```bash
-# Install the construct
-# (follow your constructs network installation method)
-
-# Run the full pipeline
-/forge "WebGL particle animations"
-
-# Or step by step:
-/discover "React Native performance"    # Find what to research
-/config                                  # Generate research config
-/research --config react-native          # Run the pipeline
+```
+/dig "Miyazaki loneliness design philosophy"
+/dig "CRT phosphor decay as memory metaphor"
+/dig "Dark Souls bloodstain collective consequence mechanics"
+/dig "grief rituals mapped to UI transitions"
 ```
 
-## Skills
+These aren't research queries. They're invitations to depth.
 
-| Command | Skill | Purpose |
-|---------|-------|---------|
-| `/forge` | orchestrator | Full pipeline with user checkpoints |
-| `/discover` | domain-discovery | Meta-research to find highest-impact topics |
-| `/config` | config-generator | Generate research config from discovery results |
-| `/research` | deep-research | Execute the multi-phase pipeline |
+Each dig inherits context from previous digs, building a cumulative trail of exploration. If you have a `resonance-profile.yaml`, findings that connect to your aesthetic anchors are surfaced prominently.
+
+### /forge — Batch Pipeline (systematic coverage)
+
+Full multi-phase research pipeline for when you want comprehensive domain mastery. Give it a domain and it maps the landscape, generates hyper-specific search queries, executes deep research with gap analysis, and synthesizes everything into reference-quality documents.
+
+```
+/forge "WebGL particle animations"
+```
+
+This runs: discovery (landscape mapping) -> config (query generation) -> research (grounded search + scrape + synthesis + gap-fill) -> cross-topic synthesis.
+
+## Resonance Profile
+
+Place a `resonance-profile.yaml` in your project root. This tells the construct what you're drawn to — the findings that match get surfaced prominently.
+
+```yaml
+keywords:
+  - loneliness as design
+  - collective consequence
+  - phosphor decay
+
+references:
+  - Dark Souls
+  - Neuromancer
+  - Wabi-sabi
+
+touchstones:
+  - game mechanics as emotional language
+  - decay and impermanence in interfaces
+  - constraint as creative catalyst
+
+aesthetic: Minimalist, melancholic, systems-driven.
+```
+
+Fill this in before you dig anything meaningful. It's fifteen minutes that changes what you find.
 
 ## Pipeline Architecture
 
 ```
-User: "I want to master X"
-         |
-         v
-    /discover
-    Meta-research via Gemini + Google Search (6-10 queries)
-         |
-         v
-    Ranked list of 6-8 research domains
-    [USER CHECKPOINT: review and adjust]
-         |
-         v
-    /config
-    Generate research config (search queries + focus areas per topic)
-    [USER CHECKPOINT: review queries]
-         |
-         v
-    /research
-    For each topic (parallel):
-      1. Grounded Search (5-7 queries via Gemini + Google Search)
-      2. Deep Scraping (top N URLs via Firecrawl, optional)
-      3. First Synthesis (merge findings against focus areas)
-      4. Gap Analysis (identify unanswered questions)
-      5. Gap Fill (3-5 additional grounded searches)
-      6. Final Synthesis (exhaustive merge of all rounds)
-         |
-         v
-    Cross-Topic Synthesis
-    (patterns, implementation order, key findings)
-         |
-         v
-    Output: scripts/research-output/*.md
+/dig "your thread"                         /forge "your domain"
+     |                                          |
+     v                                          v
+  Focused grounded search              Discovery (6-10 meta-queries)
+     |                                          |
+     v                                          v
+  Synthesis with resonance             Config generation (queries + focus areas)
+     |                                          |
+     v                                          v
+  Pull threads surfaced                Per-topic deep research (parallel):
+     |                                    grounded search -> scrape -> synthesize
+     v                                    -> gap analysis -> gap fill -> final merge
+  User picks a thread,                          |
+  /dig again (deeper)                           v
+                                        Cross-topic synthesis
+                                                |
+                                                v
+                                        Output: research-output/*.md
 ```
 
 ## Requirements
@@ -78,25 +84,18 @@ User: "I want to master X"
 | Requirement | Required | Notes |
 |---|---|---|
 | Gemini API Key | Yes | `GEMINI_API_KEY` or `GOOGLE_API_KEY` in `.env` |
-| Firecrawl API Key | No | `FIRECRAWL_API_KEY` in `.env` — adds depth via full URL scraping |
+| Firecrawl API Key | No | `FIRECRAWL_API_KEY` — adds depth via full URL scraping |
 | Node.js + tsx | Yes | `npx tsx` must work |
 
-## Research Quality
+## All Commands
 
-The pipeline is designed for the top 0.1%, not the top 10%. Quality signals:
-
-- **Source diversity** — Engineering blogs, conference talks, source code, papers. Not tutorials.
-- **Named practitioners** — Real people who shipped real systems.
-- **Actionable output** — Code, formulas, specific numbers. Not vague advice.
-- **Gap coverage** — Two rounds of search. The first pass always misses things.
-- **Cross-topic patterns** — Techniques that appear across multiple domains.
-
-## Example Output
-
-The `webgl-particles` construct was built using this pipeline:
-- 8 research domains, 229 unique sources
-- Topics: GPU architecture, procedural math, production case studies, optical realism, motion physics, R3F patterns, globe geometry, creative coding workflows
-- Each topic: 15-40 sources, complete code recipes, production values, amateur vs professional comparisons
+| Command | Purpose |
+|---------|---------|
+| `/dig` | Interactive pair-research — k-hole mode |
+| `/forge` | Full batch pipeline with user checkpoints |
+| `/discover` | Meta-research to map the landscape |
+| `/config` | Generate research config from discovery |
+| `/research` | Execute the multi-phase pipeline |
 
 ## License
 
