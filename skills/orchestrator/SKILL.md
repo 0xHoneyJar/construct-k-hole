@@ -1,13 +1,15 @@
 ---
 name: orchestrator
-description: Master workflow that guides the full research pipeline from domain description to comprehensive output
+description: Batch pipeline — systematic domain research from landscape mapping to exhaustive synthesis
 user-invocable: true
 allowed-tools: Read, Write, Glob, Grep, Edit, Bash, Agent
 ---
 
-# Research Orchestrator
+# Forge — Batch Research Pipeline
 
-Master workflow for the Deep Research construct. Takes a high-level domain description and produces comprehensive, expert-level research documents.
+Systematic domain mastery. Maps the landscape, generates hyper-specific search queries, executes deep research with gap analysis across 6-8 domains in parallel, synthesizes everything into reference-quality documents.
+
+This is the cartographic mode of K-Hole. If `/dig` is immersive pair-research, `/forge` is comprehensive territory mapping. Use `/forge` when you want coverage. Use `/dig` when you want depth on a single thread. Use both when you want to map first, then descend into what pulled hardest.
 
 ## Trigger
 
