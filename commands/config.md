@@ -16,6 +16,12 @@ agent_path: "skills/config-generator"
 context_files:
   - path: "CLAUDE.md"
     required: true
+  - path: "identity/persona.yaml"
+    required: true
+  - path: "identity/expertise.yaml"
+    required: false
+  - path: "resonance-profile.yaml"
+    required: false
 ---
 
 # /config
