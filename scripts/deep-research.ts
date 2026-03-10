@@ -34,7 +34,6 @@ import { createInterface } from "readline";
 
 const SCRIPT_DIR = new URL(".", import.meta.url).pathname;
 const OUTPUT_DIR = join(SCRIPT_DIR, "research-output");
-const MODEL = "gemini-3.1-pro-preview";
 
 // Load .env from project root or script directory
 for (const envDir of [join(SCRIPT_DIR, ".."), SCRIPT_DIR]) {
@@ -68,6 +67,9 @@ function getArg(name: string): string | null {
   if (idx === -1) return null;
   return process.argv[idx + 1] ?? null;
 }
+
+// Model configurable via --model flag or FORGE_MODEL env var
+const MODEL = getArg("model") || process.env.FORGE_MODEL || "gemini-3.1-pro-preview";
 
 const CONFIG_NAME = getArg("config");
 if (!CONFIG_NAME) {

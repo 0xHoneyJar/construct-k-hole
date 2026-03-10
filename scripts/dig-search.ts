@@ -80,7 +80,7 @@ const SEARCH_DEPTH = Math.min(
   4
 );
 const MODEL =
-  getArg("model") || process.env.DIG_MODEL || "gemini-2.5-flash";
+  getArg("model") || process.env.DIG_MODEL || "gemini-3-flash-preview";
 
 // ─── Gemini API ──────────────────────────────────────────────────
 
