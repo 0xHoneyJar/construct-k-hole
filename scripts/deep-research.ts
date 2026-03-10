@@ -69,7 +69,15 @@ function getArg(name: string): string | null {
 }
 
 // Model configurable via --model flag or FORGE_MODEL env var
-const MODEL = getArg("model") || process.env.FORGE_MODEL || "gemini-3.1-pro-preview";
+const MODEL_PRIMARY = getArg("model") || process.env.FORGE_MODEL || "gemini-3.1-pro-preview";
+
+// Fallback chain for model deprecation resilience (quality-tier)
+const FORGE_FALLBACK_MODELS = [
+  "gemini-2.5-pro",
+  "gemini-2.0-flash",
+];
+
+let MODEL = MODEL_PRIMARY;
 
 const CONFIG_NAME = getArg("config");
 if (!CONFIG_NAME) {
@@ -275,7 +283,8 @@ interface GeminiResponse {
   sources: { title: string; uri: string }[];
 }
 
-async function gemini(
+async function geminiDirect(
+  model: string,
   prompt: string,
   opts?: {
     search?: boolean;
@@ -283,9 +292,9 @@ async function gemini(
     temperature?: number;
     retries?: number;
   },
-): Promise<GeminiResponse> {
+): Promise<{ response?: GeminiResponse; modelNotFound?: boolean; error?: string }> {
   const { search = false, maxTokens = 8192, temperature = 0.7, retries = 3 } = opts ?? {};
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent?key=${GEMINI_KEY}`;
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${GEMINI_KEY}`;
 
   const body: Record<string, unknown> = {
     contents: [{ parts: [{ text: prompt }] }],
@@ -298,11 +307,25 @@ async function gemini(
 
   for (let attempt = 0; attempt <= retries; attempt++) {
     try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 120_000);
+
       const res = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
+        signal: controller.signal,
       });
+
+      clearTimeout(timeout);
+
+      // Model deprecated or not found — signal caller to try fallback
+      if (res.status === 404) {
+        const err = await res.text();
+        if (err.includes("not found") || err.includes("deprecated")) {
+          return { modelNotFound: true, error: `${model}: ${err.slice(0, 150)}` };
+        }
+      }
 
       if (res.status === 429 || res.status >= 500) {
         if (attempt < retries) {
@@ -320,13 +343,35 @@ async function gemini(
 
       const data = await res.json();
       const cand = data.candidates?.[0];
-      if (!cand) throw new Error("No candidates in response");
+
+      // Safety block or empty response
+      if (!cand || !cand.content?.parts?.length) {
+        const reason = cand?.finishReason || "NO_CANDIDATES";
+        if (reason === "SAFETY" || reason === "RECITATION") {
+          log("WARN", `Response blocked (${reason}), retrying...`);
+          if (attempt < retries) {
+            await new Promise((r) => setTimeout(r, 2000));
+            continue;
+          }
+          return { response: { text: `[Search blocked by safety filter: ${reason}]`, sources: [] } };
+        }
+        throw new Error(`No candidates in response (finishReason: ${reason})`);
+      }
 
       const text =
-        cand.content?.parts
-          ?.filter((p: { text?: string }) => p.text)
+        cand.content.parts
+          .filter((p: { text?: string }) => p.text)
           .map((p: { text: string }) => p.text)
           .join("\n") ?? "";
+
+      if (!text.trim()) {
+        if (attempt < retries) {
+          log("WARN", "Empty response, retrying...");
+          await new Promise((r) => setTimeout(r, 2000));
+          continue;
+        }
+        return { response: { text: "[Empty response from model]", sources: [] } };
+      }
 
       const sources = (cand.groundingMetadata?.groundingChunks ?? []).map(
         (c: { web?: { title?: string; uri?: string } }) => ({
@@ -335,8 +380,11 @@ async function gemini(
         }),
       );
 
-      return { text, sources };
+      return { response: { text, sources } };
     } catch (err) {
+      if (err instanceof DOMException && err.name === "AbortError") {
+        log("RETRY", "Request timed out (120s)");
+      }
       if (attempt < retries) {
         const wait = (attempt + 1) * 4000;
         log("RETRY", `Error — waiting ${wait / 1000}s: ${String(err).slice(0, 100)}`);
@@ -348,6 +396,40 @@ async function gemini(
   }
 
   throw new Error("Exhausted retries");
+}
+
+async function gemini(
+  prompt: string,
+  opts?: {
+    search?: boolean;
+    maxTokens?: number;
+    temperature?: number;
+    retries?: number;
+  },
+): Promise<GeminiResponse> {
+  // Try active model first
+  const result = await geminiDirect(MODEL, prompt, opts);
+  if (result.response) return result.response;
+
+  // Model not found — walk the fallback chain
+  if (result.modelNotFound) {
+    log("WARN", `Model ${MODEL} not found, trying fallbacks...`);
+
+    for (const fallback of FORGE_FALLBACK_MODELS) {
+      if (fallback === MODEL) continue;
+      log("INFO", `Trying fallback model: ${fallback}`);
+      const fbResult = await geminiDirect(fallback, prompt, opts);
+      if (fbResult.response) {
+        MODEL = fallback; // Sticky for rest of session
+        log("INFO", `Fell back to ${fallback} (sticky for this session)`);
+        return fbResult.response;
+      }
+      if (fbResult.modelNotFound) continue;
+    }
+    throw new Error(`All models unavailable. Tried: ${MODEL_PRIMARY}, ${FORGE_FALLBACK_MODELS.join(", ")}`);
+  }
+
+  throw new Error(result.error || "Unknown Gemini error");
 }
 
 // ─── Firecrawl API (Optional Deep Scraping) ─────────────────────

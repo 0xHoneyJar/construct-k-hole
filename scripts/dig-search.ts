@@ -79,8 +79,16 @@ const SEARCH_DEPTH = Math.min(
   Math.max(parseInt(getArg("depth") || "2", 10), 1),
   4
 );
-const MODEL =
+const MODEL_PRIMARY =
   getArg("model") || process.env.DIG_MODEL || "gemini-3-flash-preview";
+
+// Fallback chain for model deprecation resilience (speed-tier)
+const DIG_FALLBACK_MODELS = [
+  "gemini-2.5-flash",
+  "gemini-2.0-flash",
+];
+
+let activeModel = MODEL_PRIMARY;
 
 // ─── Gemini API ──────────────────────────────────────────────────
 
@@ -89,21 +97,22 @@ interface GeminiResponse {
   sources: { title: string; uri: string }[];
 }
 
-async function gemini(
+async function geminiCall(
+  model: string,
   prompt: string,
   opts?: {
     search?: boolean;
     maxTokens?: number;
     temperature?: number;
   }
-): Promise<GeminiResponse> {
+): Promise<{ response?: GeminiResponse; modelNotFound?: boolean; error?: string }> {
   const {
     search = false,
     maxTokens = 8192,
     temperature = 0.7,
   } = opts ?? {};
 
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent?key=${GEMINI_KEY}`;
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${GEMINI_KEY}`;
 
   const body: Record<string, unknown> = {
     contents: [{ parts: [{ text: prompt }] }],
@@ -116,11 +125,25 @@ async function gemini(
 
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 60_000);
+
       const res = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
+        signal: controller.signal,
       });
+
+      clearTimeout(timeout);
+
+      // Model deprecated or not found — signal caller to try fallback
+      if (res.status === 404) {
+        const err = await res.text();
+        if (err.includes("not found") || err.includes("deprecated")) {
+          return { modelNotFound: true, error: `${model}: ${err.slice(0, 150)}` };
+        }
+      }
 
       if (res.status === 429 || res.status >= 500) {
         if (attempt < 2) {
@@ -140,13 +163,37 @@ async function gemini(
 
       const data = await res.json();
       const cand = data.candidates?.[0];
-      if (!cand) throw new Error("No candidates in Gemini response");
+
+      // Safety block or empty response
+      if (!cand || !cand.content?.parts?.length) {
+        const reason = cand?.finishReason || "NO_CANDIDATES";
+        if (reason === "SAFETY" || reason === "RECITATION") {
+          process.stderr.write(
+            `[dig] Response blocked (${reason}), retrying with simpler prompt...\n`
+          );
+          if (attempt < 2) {
+            await new Promise((r) => setTimeout(r, 2000));
+            continue;
+          }
+          return { response: { text: `[Search blocked by safety filter: ${reason}]`, sources: [] } };
+        }
+        throw new Error(`No candidates in Gemini response (finishReason: ${reason})`);
+      }
 
       const text =
-        cand.content?.parts
-          ?.filter((p: { text?: string }) => p.text)
+        cand.content.parts
+          .filter((p: { text?: string }) => p.text)
           .map((p: { text: string }) => p.text)
           .join("\n") ?? "";
+
+      if (!text.trim()) {
+        if (attempt < 2) {
+          process.stderr.write(`[dig] Empty response, retrying...\n`);
+          await new Promise((r) => setTimeout(r, 2000));
+          continue;
+        }
+        return { response: { text: "[Empty response from model]", sources: [] } };
+      }
 
       const sources = (
         cand.groundingMetadata?.groundingChunks ?? []
@@ -155,8 +202,11 @@ async function gemini(
         uri: c.web?.uri ?? "",
       }));
 
-      return { text, sources };
+      return { response: { text, sources } };
     } catch (err) {
+      if (err instanceof DOMException && err.name === "AbortError") {
+        process.stderr.write(`[dig] Request timed out (60s), retrying...\n`);
+      }
       if (attempt < 2) {
         await new Promise((r) =>
           setTimeout(r, (attempt + 1) * 3000)
@@ -168,6 +218,41 @@ async function gemini(
   }
 
   throw new Error("Exhausted retries");
+}
+
+async function gemini(
+  prompt: string,
+  opts?: {
+    search?: boolean;
+    maxTokens?: number;
+    temperature?: number;
+  }
+): Promise<GeminiResponse> {
+  // Try active model first
+  const result = await geminiCall(activeModel, prompt, opts);
+  if (result.response) return result.response;
+
+  // Model not found — walk the fallback chain
+  if (result.modelNotFound) {
+    process.stderr.write(
+      `[dig] Model ${activeModel} not found, trying fallbacks...\n`
+    );
+
+    for (const fallback of DIG_FALLBACK_MODELS) {
+      if (fallback === activeModel) continue;
+      process.stderr.write(`[dig] Trying ${fallback}...\n`);
+      const fbResult = await geminiCall(fallback, prompt, opts);
+      if (fbResult.response) {
+        activeModel = fallback; // Sticky for rest of session
+        process.stderr.write(`[dig] Fell back to ${fallback} (sticky for this session)\n`);
+        return fbResult.response;
+      }
+      if (fbResult.modelNotFound) continue;
+    }
+    throw new Error(`All models unavailable. Tried: ${activeModel}, ${DIG_FALLBACK_MODELS.join(", ")}`);
+  }
+
+  throw new Error(result.error || "Unknown Gemini error");
 }
 
 // ─── Resonance Profile ───────────────────────────────────────────
@@ -323,7 +408,7 @@ async function dig() {
   const trail = loadTrail();
 
   process.stderr.write(
-    `[dig] Thread: "${QUERY}" | Depth: ${SEARCH_DEPTH} | Model: ${MODEL}\n`
+    `[dig] Thread: "${QUERY}" | Depth: ${SEARCH_DEPTH} | Model: ${activeModel}\n`
   );
   if (resonance) process.stderr.write(`[dig] Resonance profile loaded\n`);
   if (trail) process.stderr.write(`[dig] Trail context loaded\n`);
@@ -406,7 +491,9 @@ async function dig() {
     })),
     source_count: uniqueSources.length,
     search_count: searches.length,
-    model: MODEL,
+    model: activeModel,
+    model_primary: MODEL_PRIMARY,
+    used_fallback: activeModel !== MODEL_PRIMARY,
     elapsed_seconds: parseFloat(elapsed),
     had_resonance: !!resonance,
     had_trail: !!trail,
