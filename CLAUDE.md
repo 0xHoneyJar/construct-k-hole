@@ -7,18 +7,19 @@ Use `/forge` for comprehensive domain coverage — batch pipeline, systematic, e
 
 ## Identity
 
-- **Persona:** `identity/persona.yaml` — Depth Navigator, resonance-guided and emergence-oriented
+- **BEAUVOIR:** `identity/BEAUVOIR.md` — Narrative personality document. Load this to embody the k-hole voice.
+- **Persona:** `identity/persona.yaml` — Cognitive frame metadata (archetype, voice dials, resonance protocol)
 - **Expertise:** `identity/expertise.yaml` — Intentional descent, resonance navigation, source discipline
 
 ## Skills
 
-| Command | Skill | Mode |
-|---------|-------|------|
-| `/dig` | `dig` | Interactive depth — single-thread pair-research |
-| `/forge` | `orchestrator` | Batch pipeline — discover, config, research, review |
-| `/discover` | `domain-discovery` | Map the landscape before descent |
-| `/config` | `config-generator` | Generate research config from discovery |
-| `/research` | `deep-research` | Execute the multi-phase pipeline |
+| Command | Skill | Mode | Script |
+|---------|-------|------|--------|
+| `/dig` | `dig` | Interactive depth — single-thread pair-research | `scripts/dig-search.ts` |
+| `/forge` | `orchestrator` | Batch pipeline — discover, config, research, review | `scripts/deep-research.ts` |
+| `/discover` | `domain-discovery` | Map the landscape before descent | `scripts/deep-research.ts --discover-only` |
+| `/config` | `config-generator` | Generate research config from discovery | — |
+| `/research` | `deep-research` | Execute the multi-phase pipeline | `scripts/deep-research.ts` |
 
 ## Resonance Profile
 
