@@ -69,6 +69,8 @@ Output: research-output/<date>_<config>_*.md
 
 ## Running the Pipeline
 
+**CRITICAL: You MUST run this script via Bash tool. Do NOT skip it. Do NOT substitute your own web search. The script calls Gemini with grounded Google Search — this produces real sources with provenance that you cannot replicate with other tools.**
+
 ### Prerequisites
 
 1. Verify API keys:

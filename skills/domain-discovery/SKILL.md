@@ -54,6 +54,8 @@ GOOD: "What specific techniques do Stripe, GitHub, Vercel engineers use for prod
 
 ### Step 3: Run Discovery
 
+**MUST run via Bash tool. Do NOT skip this step. Do NOT substitute your own web search.**
+
 Write a temporary research config with ONLY the discovery queries and run the pipeline in discover-only mode:
 
 ```bash
@@ -61,6 +63,8 @@ npx tsx scripts/deep-research.ts --config <domain> --discover-only
 ```
 
 If no config exists yet, create a minimal one with just the discovery queries (no TOPICS needed for discover-only mode).
+
+**Fallback (ONLY if script exits with error):** Report the error to the user, then fall back to available web search tools. Never silently skip the script.
 
 ### Step 4: Synthesize Results
 

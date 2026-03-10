@@ -34,15 +34,25 @@ This is the cartographic mode. If `/dig` is immersive pair-research (following o
 
 ## Instructions
 
+**CRITICAL: You MUST run the deep-research script via Bash tool. Do NOT skip it. Do NOT substitute your own web search. The script calls Gemini with grounded Google Search — this produces real sources with provenance that you cannot replicate with other tools.**
+
 The user wants to master a domain. Run the complete pipeline:
 
 1. **Understand their goal** — What domain? What do they already know? What will they build?
-2. **Discover sub-domains** — Run meta-research to map the landscape (`/discover` workflow)
-3. **Generate research config** — Create the config file from discovery results (`/config` workflow)
-4. **Execute deep research** — Run the pipeline script (`/research` workflow)
+2. **Discover sub-domains** — MUST run via Bash tool:
+   ```bash
+   npx tsx scripts/deep-research.ts --discover-only --domain "<domain>"
+   ```
+3. **Generate research config** — Create the config file from discovery results
+4. **Execute deep research** — MUST run via Bash tool:
+   ```bash
+   npx tsx scripts/deep-research.ts --config <domain>
+   ```
 5. **Review and organize** — Present findings, identify remaining gaps, surface threads worth `/dig`-ing
 
 Execute the `orchestrator` skill workflow. Follow the phase checkpoints — pause between phases to let the user review and steer.
+
+**Fallback (ONLY if script exits with error):** If the script fails AND returns an error (missing API key, all models down), THEN fall back to available web search tools. Log the script error so the user knows. Never silently skip the script.
 
 ## After Completion
 

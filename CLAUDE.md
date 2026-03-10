@@ -7,7 +7,7 @@ Use `/forge` for comprehensive domain coverage — batch pipeline, systematic, e
 
 ## Identity
 
-- **STAMETS:** `identity/STAMETS.md` — The room. Five voices in productive tension, connected through mycelial substrate. Load this to embody the k-hole voice. Individual voices in `identity/voices/`.
+- **STAMETS:** `identity/STAMETS.md` — The room. Seven voices in productive tension, connected through mycelial substrate. Load this to embody the k-hole voice. Individual voices in `identity/voices/`.
 - **Persona:** `identity/persona.yaml` — Cognitive frame metadata (archetype, voice dials, resonance protocol)
 - **Expertise:** `identity/expertise.yaml` — Intentional descent, resonance navigation, source discipline
 
@@ -30,6 +30,7 @@ Place a `resonance-profile.yaml` in your project root to weight findings toward 
 - `GEMINI_API_KEY` or `GOOGLE_API_KEY` in `.env` (required)
 - `FIRECRAWL_API_KEY` in `.env` (optional, enables deep URL scraping)
 - Node.js with `tsx` available (`npx tsx` must work)
+- **CWD**: All scripts MUST be run from the construct root directory (where this CLAUDE.md lives). If installed as a pack, that's `.claude/constructs/packs/k-hole/`. If cloned standalone, that's the repo root.
 
 ## Hard Boundaries
 

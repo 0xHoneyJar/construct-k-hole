@@ -34,8 +34,11 @@ The orchestrator runs four phases in sequence:
 **Input:** The user's high-level domain description (e.g., "WebGL particle animations")
 
 **What happens:**
-1. Run 6-10 grounded meta-research queries via the pipeline script's `--discover-only` mode
-2. Gemini + Google Search finds the landscape: who the top practitioners are, what the key sub-domains are, what separates amateurs from experts
+1. **MUST run via Bash tool:**
+   ```bash
+   npx tsx scripts/deep-research.ts --discover-only --domain "<domain>"
+   ```
+2. The script runs 6-10 grounded meta-research queries — Gemini + Google Search finds the landscape: who the top practitioners are, what the key sub-domains are, what separates amateurs from experts
 3. Synthesize findings into a ranked list of 6-8 high-impact research topics
 4. Present the ranked topics to the user for review and selection
 
@@ -64,7 +67,11 @@ The orchestrator runs four phases in sequence:
 **Input:** The generated config file
 
 **What happens:**
-1. Execute the pipeline script: `npx tsx scripts/deep-research.ts --config <domain>`
+1. **MUST run via Bash tool:**
+   ```bash
+   npx tsx scripts/deep-research.ts --config <domain>
+   ```
+   Add `--model <model>` to override default. Add `FORGE_MODEL=<model>` env var for sticky override.
 2. For each topic, the script runs:
    - Grounded search (Gemini + Google Search) with all search queries
    - Optional deep scraping (Firecrawl) of the highest-value URLs found

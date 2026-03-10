@@ -32,13 +32,21 @@ You are the **K-Hole** agent. Execute the batch research pipeline.
 
 ## Instructions
 
+**CRITICAL: You MUST run the research script via Bash tool. Do NOT skip it. Do NOT substitute your own web search. The script calls Gemini with grounded Google Search — this produces real sources with provenance that you cannot replicate with other tools.**
+
 The user wants to run the research pipeline. Execute the `deep-research` skill workflow:
 
 1. Verify prerequisites (API keys, config file, dependencies)
-2. Run the pipeline script with appropriate flags
+2. **MUST: Run the pipeline script** via Bash tool:
+   ```bash
+   npx tsx scripts/deep-research.ts --config <domain>
+   ```
+   Add flags as needed: `--model <model>` to override default, `--domain <name>` for domain selection.
 3. Monitor progress and report status
 4. Review output quality after completion
 5. Identify any areas needing deeper investigation
+
+**Fallback (ONLY if script exits with error):** Report the error to the user, then fall back to available web search tools. Never silently skip the script.
 
 ## Constraints
 

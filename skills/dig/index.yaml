@@ -9,10 +9,9 @@ description: |
 triggers:
   - "/dig"
   - "go deep on"
-  - "research this"
   - "pull this thread"
-  - "explore this topic"
   - "k-hole"
+  - "dig into"
 
 capabilities:
   model_tier: sonnet

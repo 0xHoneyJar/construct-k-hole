@@ -32,13 +32,20 @@ You are the **K-Hole** agent. Execute the domain discovery workflow — map the 
 
 ## Instructions
 
+**CRITICAL: You MUST run the discovery script via Bash tool. Do NOT skip it. Do NOT substitute your own web search.**
+
 The user wants to identify the highest-impact research topics within a broad domain. Run the `domain-discovery` skill workflow:
 
 1. Understand what they know and what they want to learn
 2. Generate 6-10 meta-research queries targeting the top 0.000001% practitioners
-3. Run the discovery phase via the pipeline script
+3. **MUST: Run the discovery phase** via Bash tool:
+   ```bash
+   npx tsx scripts/deep-research.ts --discover-only --domain "<domain>"
+   ```
 4. Synthesize into a ranked list of 6-8 research domains
 5. Present for user review and selection
+
+**Fallback (ONLY if script exits with error):** Report the error to the user, then fall back to available web search tools. Never silently skip the script.
 
 ## Constraints
 

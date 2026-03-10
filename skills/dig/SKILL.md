@@ -51,7 +51,7 @@ Both are valid. Both produce knowledge. The difference is the relationship to th
 Each `/dig` invocation:
 
 1. Takes a phrase, finding, or question — a raw thread
-2. Runs 2-3 focused grounded searches (Gemini + Google Search)
+2. Runs 1-4 focused grounded search angles (controlled by `--depth`, default 2)
 3. Synthesizes findings with resonance profile weighting
 4. Surfaces 3-5 **pull threads** — specific sub-topics worth following deeper
 5. The user picks a thread. `/dig` again. Deeper.
