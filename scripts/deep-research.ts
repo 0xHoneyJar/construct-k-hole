@@ -35,19 +35,28 @@ import { createInterface } from "readline";
 const SCRIPT_DIR = new URL(".", import.meta.url).pathname;
 const OUTPUT_DIR = join(SCRIPT_DIR, "research-output");
 
-// Load .env from project root or script directory
-for (const envDir of [join(SCRIPT_DIR, ".."), SCRIPT_DIR]) {
-  const envPath = join(envDir, ".env");
-  if (existsSync(envPath)) {
-    for (const line of readFileSync(envPath, "utf-8").split("\n")) {
-      const match = line.match(/^(\w+)=(.*)$/);
-      if (match && !process.env[match[1]]) {
-        // Strip wrapping quotes — .env files commonly use KEY="value" format
-        process.env[match[1]] = match[2].trim().replace(/^["']|["']$/g, "");
+// Load .env — walk up from script directory to filesystem root.
+// Handles both standalone repos (.env one level up) and installed packs
+// (.env at project root, many levels above .claude/constructs/packs/k-hole/scripts/).
+function loadEnv() {
+  let dir = SCRIPT_DIR;
+  while (true) {
+    const envPath = join(dir, ".env");
+    if (existsSync(envPath)) {
+      for (const line of readFileSync(envPath, "utf-8").split("\n")) {
+        const match = line.match(/^(\w+)=(.*)$/);
+        if (match && !process.env[match[1]]) {
+          process.env[match[1]] = match[2].trim().replace(/^["']|["']$/g, "");
+        }
       }
+      return;
     }
+    const parent = join(dir, "..");
+    if (parent === dir) return; // hit filesystem root
+    dir = parent;
   }
 }
+loadEnv();
 
 const GEMINI_KEY = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
 if (!GEMINI_KEY) {
