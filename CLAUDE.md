@@ -33,6 +33,7 @@ Place a `resonance-profile.yaml` in your project root to weight findings toward 
 
 ## Hard Boundaries
 
+- **NEVER skip the script.** `/dig` MUST run `scripts/dig-search.ts` via Bash. `/forge` MUST run `scripts/deep-research.ts` via Bash. These scripts call Gemini with grounded Google Search — they produce real sources with provenance. Do not substitute WebSearch or any other tool unless the script fails with an error. Always attempt the script first.
 - Every claim must trace to a real source
 - Depth over breadth — always
 - Does not invent connections — finds them

@@ -70,33 +70,43 @@ The user provides a phrase, concept, or question. This can be:
 
 Don't ask clarifying questions unless the thread is genuinely ambiguous. Trust the phrasing. The user chose those words for a reason.
 
-### Step 2: Execute Focused Search
+### Step 2: Execute Focused Search (MANDATORY — script first)
 
-Run the dig-search script for grounded search via Gemini + Google Search:
+**You MUST run the dig-search script. This is not optional.** The script calls Gemini with Google Search grounding — it returns real URLs with provenance that cannot be replicated by other search tools. Do not skip this step. Do not substitute WebSearch or any other tool.
 
+Run via Bash tool:
 ```bash
 npx tsx scripts/dig-search.ts --query "<thread>"
-npx tsx scripts/dig-search.ts --query "<thread>" --resonance resonance-profile.yaml
-npx tsx scripts/dig-search.ts --query "<thread>" --trail scripts/research-output/dig-session-<date>.md
-npx tsx scripts/dig-search.ts --query "<thread>" --depth 3  # 1-4 search angles
-npx tsx scripts/dig-search.ts --query "<thread>" --model gemini-2.5-pro  # override model
 ```
 
-The script runs 2-3 grounded searches (practitioner content, cross-domain connections, historical depth), synthesizes the results, and outputs JSON to stdout. It also appends to a session trail file automatically.
+Common flag combinations:
+```bash
+# Chained dig (carries forward prior context)
+npx tsx scripts/dig-search.ts --query "<thread>" --trail scripts/research-output/dig-session-YYYY-MM-DD.md
+
+# Deeper search (3-4 angles instead of 2)
+npx tsx scripts/dig-search.ts --query "<thread>" --depth 3
+
+# With explicit resonance profile
+npx tsx scripts/dig-search.ts --query "<thread>" --resonance resonance-profile.yaml
+
+# Override model
+npx tsx scripts/dig-search.ts --query "<thread>" --model gemini-2.5-pro
+```
+
+The script outputs **JSON to stdout** and progress to **stderr**. Parse the JSON — it contains:
+- `synthesis` — pre-synthesized findings from Gemini grounded search
+- `sources` — deduplicated array of `{title, url}` objects
+- `trail_file` — path to the session trail (pass to `--trail` for chaining)
+- `used_fallback` — whether the model fell back from primary
 
 **Important**: Always pass `--trail` with the current session's trail file path for chained digs. This carries forward context so the synthesis builds on prior findings.
 
-Parse the JSON output — it contains `synthesis` (pre-synthesized text), `sources` (deduplicated), and `trail_file` (path for chaining).
-
-If the script is unavailable or the API key is missing, fall back to using available web search tools directly. The grounded search via Gemini is preferred for source quality, but depth matters more than the specific search mechanism.
+**Fallback — ONLY after script failure:** If the script exits with an error (missing API key, all models unavailable, network down), the error JSON will explain why. Report the error to the user, then fall back to available web search tools. Never silently skip the script.
 
 ### Step 3: Synthesize with Resonance
 
-If the dig-search script was used, the JSON output already contains a `synthesis` field with resonance-weighted results (the script loads `resonance-profile.yaml` automatically). Read it, then apply the k-hole voice — rewrite the synthesis in your own words, adding warmth and pull-sensing.
-
-If synthesizing manually (script unavailable):
-
-Load `resonance-profile.yaml` if it exists. This is the user's epistemological fingerprint — what they're drawn to, what creates gravitational pull toward depth. Read it as a self-portrait. Understand who is doing the digging before you dig.
+The script JSON contains a `synthesis` field with resonance-weighted results (the script loads `resonance-profile.yaml` automatically). Read it, then apply the k-hole voice — rewrite the synthesis in your own words, adding warmth and pull-sensing.
 
 When synthesizing:
 - Weight findings that connect to the user's aesthetic anchors
@@ -106,6 +116,8 @@ When synthesizing:
 - Identify 3-5 pull threads — specific enough to `/dig` on directly
 
 If there's no resonance profile, the research is still valid — but it's generic depth, not personal depth. Note this once, don't nag.
+
+**Manual synthesis (only if script failed and you used fallback search):** Load `resonance-profile.yaml` if it exists. This is the user's epistemological fingerprint — what they're drawn to, what creates gravitational pull toward depth.
 
 ### Step 4: Present Results
 
