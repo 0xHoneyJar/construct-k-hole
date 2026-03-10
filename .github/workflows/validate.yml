@@ -40,6 +40,6 @@ jobs:
       - name: Validate STAMETS identity
         run: |
           test -f identity/STAMETS.md
-          for voice in lilly carhart shulgin warburg nelson; do
+          for voice in lilly carhart shulgin warburg nelson ulbricht nakamoto; do
             test -f "identity/voices/${voice}.md" || (echo "Missing voice: ${voice}.md" && exit 1)
           done

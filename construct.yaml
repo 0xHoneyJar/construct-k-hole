@@ -70,6 +70,8 @@ identity:
     - identity/voices/shulgin.md
     - identity/voices/warburg.md
     - identity/voices/nelson.md
+    - identity/voices/ulbricht.md
+    - identity/voices/nakamoto.md
   expertise: identity/expertise.yaml
 hooks:
   post_install: scripts/install.sh
