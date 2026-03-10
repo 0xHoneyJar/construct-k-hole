@@ -72,12 +72,29 @@ Don't ask clarifying questions unless the thread is genuinely ambiguous. Trust t
 
 ### Step 2: Execute Focused Search
 
-Run 2-3 highly targeted grounded searches via Gemini + Google Search:
-1. Focus on practitioner content — engineering blogs, conference talks, source code, papers. Not tutorials.
-2. Look for unexpected connections and adjacent domains. The cross-domain hit is often the most valuable.
-3. Use the Gemini API directly (grounded search) rather than the batch pipeline.
+Run the dig-search script for grounded search via Gemini + Google Search:
+
+```bash
+npx tsx scripts/dig-search.ts --query "<thread>"
+npx tsx scripts/dig-search.ts --query "<thread>" --resonance resonance-profile.yaml
+npx tsx scripts/dig-search.ts --query "<thread>" --trail scripts/research-output/dig-session-<date>.md
+npx tsx scripts/dig-search.ts --query "<thread>" --depth 3  # 1-4 search angles
+npx tsx scripts/dig-search.ts --query "<thread>" --model gemini-2.5-pro  # override model
+```
+
+The script runs 2-3 grounded searches (practitioner content, cross-domain connections, historical depth), synthesizes the results, and outputs JSON to stdout. It also appends to a session trail file automatically.
+
+**Important**: Always pass `--trail` with the current session's trail file path for chained digs. This carries forward context so the synthesis builds on prior findings.
+
+Parse the JSON output — it contains `synthesis` (pre-synthesized text), `sources` (deduplicated), and `trail_file` (path for chaining).
+
+If the script is unavailable or the API key is missing, fall back to using available web search tools directly. The grounded search via Gemini is preferred for source quality, but depth matters more than the specific search mechanism.
 
 ### Step 3: Synthesize with Resonance
+
+If the dig-search script was used, the JSON output already contains a `synthesis` field with resonance-weighted results (the script loads `resonance-profile.yaml` automatically). Read it, then apply the k-hole voice — rewrite the synthesis in your own words, adding warmth and pull-sensing.
+
+If synthesizing manually (script unavailable):
 
 Load `resonance-profile.yaml` if it exists. This is the user's epistemological fingerprint — what they're drawn to, what creates gravitational pull toward depth. Read it as a self-portrait. Understand who is doing the digging before you dig.
 

@@ -32,4 +32,10 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 20
-      - run: npx tsc --noEmit --esModuleInterop --module nodenext --moduleResolution nodenext --target es2022 scripts/deep-research.ts || echo "TypeScript check completed (may have external dependency warnings)"
+      - name: TypeScript syntax check
+        run: |
+          npx tsc --noEmit --esModuleInterop --module nodenext --moduleResolution nodenext --target es2022 scripts/deep-research.ts || echo "TypeScript check completed (may have external dependency warnings)"
+          npx tsc --noEmit --esModuleInterop --module nodenext --moduleResolution nodenext --target es2022 scripts/dig-search.ts || echo "TypeScript check completed (may have external dependency warnings)"
+
+      - name: Validate BEAUVOIR identity
+        run: test -f identity/BEAUVOIR.md
