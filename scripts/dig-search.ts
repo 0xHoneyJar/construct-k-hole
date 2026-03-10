@@ -9,6 +9,7 @@
  *   npx tsx scripts/dig-search.ts --query "your thread" --resonance path/to/profile.yaml
  *   npx tsx scripts/dig-search.ts --query "your thread" --trail path/to/trail.md
  *   npx tsx scripts/dig-search.ts --query "your thread" --depth 3
+ *   npx tsx scripts/dig-search.ts --query "your thread" --depth 0 --trail path/to/trail.md
  *   npx tsx scripts/dig-search.ts --query "your thread" --model gemini-2.5-pro
  *
  * Output: JSON to stdout (findings, sources, pull threads)
@@ -17,7 +18,6 @@
 
 import {
   readFileSync,
-  writeFileSync,
   mkdirSync,
   existsSync,
   appendFileSync,
@@ -90,7 +90,7 @@ if (!QUERY) {
 const RESONANCE_PATH = getArg("resonance");
 const TRAIL_PATH = getArg("trail");
 const SEARCH_DEPTH = Math.min(
-  Math.max(parseInt(getArg("depth") || "2", 10), 1),
+  Math.max(parseInt(getArg("depth") || "2", 10), 0),
   4
 );
 const MODEL_PRIMARY =
@@ -109,6 +109,8 @@ let activeModel = MODEL_PRIMARY;
 interface GeminiResponse {
   text: string;
   sources: { title: string; uri: string }[];
+  supports: { text: string; sourceIndices: number[] }[];
+  webSearchQueries: string[];
 }
 
 type GeminiCallResult =
@@ -198,7 +200,7 @@ async function geminiCall(
             await new Promise((r) => setTimeout(r, 2000));
             continue;
           }
-          return { status: "success", response: { text: `[Search blocked by safety filter: ${reason}]`, sources: [] } };
+          return { status: "success", response: { text: `[Search blocked by safety filter: ${reason}]`, sources: [], supports: [], webSearchQueries: [] } };
         }
         return { status: "error", error: `No candidates (finishReason: ${reason})` };
       }
@@ -215,7 +217,7 @@ async function geminiCall(
           await new Promise((r) => setTimeout(r, 2000));
           continue;
         }
-        return { status: "success", response: { text: "[Empty response from model]", sources: [] } };
+        return { status: "success", response: { text: "[Empty response from model]", sources: [], supports: [], webSearchQueries: [] } };
       }
 
       const sources = (
@@ -225,7 +227,16 @@ async function geminiCall(
         uri: c.web?.uri ?? "",
       }));
 
-      return { status: "success", response: { text, sources } };
+      const supports = (
+        cand.groundingMetadata?.groundingSupports ?? []
+      ).map((s: { segment?: { text?: string }; groundingChunkIndices?: number[] }) => ({
+        text: s.segment?.text ?? "",
+        sourceIndices: s.groundingChunkIndices ?? [],
+      }));
+
+      const webSearchQueries: string[] = cand.groundingMetadata?.webSearchQueries ?? [];
+
+      return { status: "success", response: { text, sources, supports, webSearchQueries } };
     } catch (err) {
       if (err instanceof DOMException && err.name === "AbortError") {
         process.stderr.write(`[dig] Request timed out (60s), retrying...\n`);
@@ -349,56 +360,111 @@ function resolveTrailPath(date: string): string {
   return candidate;
 }
 
+// ─── Phase-Dependent Temperature (Carhart) ──────────────────────
+// REBUS model: high entropy early in descent, low entropy deep.
+// Trail length is our proxy for how deep we are.
+
+function synthesisTemperature(trail: string | null): number {
+  if (!trail) return 0.7; // No trail = first dig, maximum entropy
+  const len = trail.length;
+  // Linear interpolation: 0 chars → 0.7, 4000 chars (max trail) → 0.2
+  return Math.max(0.2, 0.7 - (len / 4000) * 0.5);
+}
+
+// ─── Depth Rating (Shulgin) ─────────────────────────────────────
+// Heuristic −/±/+/++/+++ based on structural signals in synthesis.
+
+function rateDepth(
+  synthesis: string,
+  sourceCount: number,
+  hasEmergence: boolean
+): string {
+  let score = 0;
+  // Named practitioners (proper nouns + verbs of creation)
+  if (/[A-Z][a-z]+\s+(published|documented|built|created|designed|wrote|proposed)/i.test(synthesis)) score++;
+  // Cross-domain connections
+  if (/connects? to|echoes|parallels?|structural similarit/i.test(synthesis)) score++;
+  // Emergence present and substantive
+  if (hasEmergence) score++;
+  // Source diversity
+  if (sourceCount >= 5) score++;
+  // Novel territory markers
+  if (/no one has|underexplored|gap in|overlooked|contrarian/i.test(synthesis)) score++;
+
+  const scale = ["\u2212", "\u00b1", "+", "++", "+++"];
+  return scale[Math.min(score, 4)];
+}
+
+// ─── Synthesis Parser (Warburg + Nelson) ─────────────────────────
+// Extract emergence and pull threads as first-class structured fields.
+
+function parseSynthesis(text: string): {
+  findings: string;
+  pull_threads: string[];
+  emergence: string | null;
+} {
+  // Extract ### Emergence section
+  const emergenceMatch = text.match(/###\s*Emergence\s*\n([\s\S]*?)(?=###|$)/);
+  const emergenceRaw = emergenceMatch?.[1]?.trim() || null;
+  const emergence = emergenceRaw && emergenceRaw.length > 10 ? emergenceRaw : null;
+
+  // Extract ### Pull Threads as array of searchable query strings
+  const threadsMatch = text.match(/###\s*Pull Threads\s*\n([\s\S]*?)(?=###|$)/);
+  const threadsRaw = threadsMatch?.[1]?.trim() || "";
+  const pull_threads = threadsRaw
+    .split(/\n/)
+    .map(line => line.replace(/^[-*]\s*/, "").replace(/\*\*/g, "").trim())
+    .filter(line => line.length > 10)
+    // Extract the searchable part before any " — " or " - " explanation
+    .map(line => {
+      const sep = line.match(/\s[\u2014\u2013-]\s/);
+      return sep ? line.slice(0, sep.index).trim() : line;
+    })
+    .filter(Boolean);
+
+  // Extract ### Findings
+  const findingsMatch = text.match(/###\s*Findings\s*\n([\s\S]*?)(?=###|$)/);
+  const findings = findingsMatch?.[1]?.trim() || text;
+
+  return { findings, pull_threads, emergence };
+}
+
 // ─── Search Query Generation ─────────────────────────────────────
 
 function buildSearchQueries(thread: string, depth: number): string[] {
   const queries: string[] = [];
 
-  // Primary: direct grounded search on the thread
+  // Depth 1 (always): direct practitioner knowledge
   queries.push(
-    [
-      `Expert analysis and practitioner insights on: ${thread}.`,
-      `Find specific people, projects, techniques, and source material`,
-      `from the top practitioners in this domain.`,
-      `Prioritize conference talks, engineering blogs, academic papers,`,
-      `and source code over tutorials and listicles.`,
-    ].join(" ")
+    `Who are the leading practitioners and researchers working on ${thread}, ` +
+    `and what specific techniques, tools, or approaches have they documented? ` +
+    `Include named individuals, published work, and engineering tradeoffs they discuss.`
   );
 
   if (depth >= 2) {
-    // Secondary: cross-domain connections and adjacent fields
+    // Depth 2: cross-domain structural parallels
     queries.push(
-      [
-        `Unexpected connections and adjacent domains related to: ${thread}.`,
-        `Look for structural parallels in other fields,`,
-        `cross-disciplinary insights, and practitioners who approach`,
-        `this from non-obvious angles. Find the lateral connections`,
-        `that someone deep in this domain might miss.`,
-      ].join(" ")
+      `What fields outside of ${thread} share structural similarities or ` +
+      `offer transferable techniques? Who are practitioners that bridge ` +
+      `${thread} with adjacent domains, and what have they published about those connections?`
     );
   }
 
   if (depth >= 3) {
-    // Tertiary: historical depth and philosophical roots
+    // Depth 3: historical lineage and intellectual origins
     queries.push(
-      [
-        `Historical origins, philosophical foundations, and evolution of: ${thread}.`,
-        `Who were the earliest practitioners? What were the foundational`,
-        `ideas? How has thinking about this changed over time?`,
-        `What was the context that made this idea emerge?`,
-      ].join(" ")
+      `What are the historical origins and foundational ideas behind ${thread}? ` +
+      `Who were the earliest practitioners, what problems were they solving, ` +
+      `and how has the field's thinking evolved from its origins to now?`
     );
   }
 
   if (depth >= 4) {
-    // Quaternary: contrarian and critical perspectives
+    // Depth 4: critical and contrarian perspectives
     queries.push(
-      [
-        `Critical perspectives, limitations, and contrarian views on: ${thread}.`,
-        `What are the strongest arguments against the mainstream view?`,
-        `Where does the conventional wisdom break down?`,
-        `What do practitioners who left this field say about why?`,
-      ].join(" ")
+      `What are the strongest critiques, known limitations, and contrarian views on ${thread}? ` +
+      `Where does conventional wisdom break down, and what do former practitioners ` +
+      `say about why they moved on or changed approach?`
     );
   }
 
@@ -421,45 +487,40 @@ async function synthesize(
     ? `\n## Previous Digs (build on these, don't repeat)\n${trail}`
     : "";
 
+  const searchBlock = searches.length > 0
+    ? [`## Search Results`, ...searches.map((s, i) => `### Search ${i + 1}\n${s.text}`)].join("\n")
+    : `No search results. Synthesize entirely from trail context and resonance anchors above.`;
+
   const prompt = [
-    `You are a depth-first research synthesizer. Merge grounded search results into a focused synthesis with pull threads for deeper exploration.`,
+    `Merge these inputs into a focused synthesis with pull threads for deeper exploration.`,
     ``,
     `## Thread: ${thread}`,
     resonanceBlock,
     trailBlock,
     ``,
-    `## Search Results`,
-    ...searches.map(
-      (s, i) => `### Search ${i + 1}\n${s.text}`
-    ),
+    searchBlock,
     ``,
     `## Instructions`,
     `Produce a synthesis in this exact structure:`,
     ``,
     `### Findings`,
-    `Merge results into a coherent narrative. Lead with the most interesting discovery.`,
-    `Name specific people, projects, artifacts. If something connects to a resonance`,
-    `anchor, name the connection: "this echoes [anchor] because..."`,
-    `Keep it focused — 3-4 paragraphs max.`,
+    `Lead with the most interesting discovery. Name specific people, projects, artifacts.`,
+    `If something connects to a resonance anchor, name it: "this echoes [anchor] because..."`,
+    `3-4 paragraphs max.`,
     ``,
     `### Pull Threads`,
-    `3-5 specific sub-topics worth following deeper. Each must be:`,
-    `- Specific enough to search on directly (not a vague topic header)`,
-    `- Accompanied by WHY it has pull — what connection it reveals`,
-    `- Framed as a question or concept, not a task`,
+    `3-5 specific sub-topics. Each line:`,
+    `- A specific searchable phrase or question \u2014 then " \u2014 " then WHY it has pull`,
     ``,
     `### Emergence`,
-    `If you notice patterns across findings (or across previous digs), name them.`,
-    `Not as conclusions — as observations. Skip this section if nothing emerges yet.`,
-    ``,
-    `Be concise. This is for conversational flow, not a report.`,
-    `If something is genuinely interesting, say so.`,
+    `Patterns across findings or previous digs. Observations, not conclusions.`,
+    `Skip this section if nothing emerges yet.`,
   ].join("\n");
 
   const result = await gemini(prompt, {
     search: false,
     maxTokens: 4096,
-    temperature: 0.5,
+    temperature: synthesisTemperature(trail),
   });
 
   return result.text;
@@ -478,28 +539,40 @@ async function dig() {
   if (resonance) process.stderr.write(`[dig] Resonance profile loaded\n`);
   if (trail) process.stderr.write(`[dig] Trail context loaded\n`);
 
-  // Run grounded searches
-  const queries = buildSearchQueries(QUERY, SEARCH_DEPTH);
-  const searches: {
-    query: string;
-    text: string;
+  // Phase: Search (skip at depth 0 — Lilly's tank)
+  type SearchResult = {
+    query: string; text: string;
     sources: { title: string; uri: string }[];
-  }[] = [];
+    supports: { text: string; sourceIndices: number[] }[];
+    webSearchQueries: string[];
+  };
+  let searches: SearchResult[] = [];
 
-  for (let i = 0; i < queries.length; i++) {
-    process.stderr.write(
-      `[dig] Search ${i + 1}/${queries.length}...\n`
+  if (SEARCH_DEPTH === 0) {
+    process.stderr.write(`[dig] Depth 0: tank mode \u2014 synthesizing from trail + resonance only\n`);
+  } else {
+    const queries = buildSearchQueries(QUERY, SEARCH_DEPTH);
+    process.stderr.write(`[dig] Running ${queries.length} search(es) in parallel...\n`);
+
+    searches = await Promise.all(
+      queries.map(async (query, i) => {
+        const result = await gemini(query, {
+          search: true,
+          maxTokens: 4096,
+          temperature: 0.0,
+        });
+        if (result.webSearchQueries.length) {
+          process.stderr.write(`[dig] Search ${i + 1}: ${result.webSearchQueries.join(" | ")}\n`);
+        }
+        return {
+          query,
+          text: result.text,
+          sources: result.sources,
+          supports: result.supports,
+          webSearchQueries: result.webSearchQueries,
+        };
+      })
     );
-    const result = await gemini(queries[i], {
-      search: true,
-      maxTokens: 4096,
-      temperature: 0.7,
-    });
-    searches.push({
-      query: queries[i],
-      text: result.text,
-      sources: result.sources,
-    });
   }
 
   // Deduplicate sources
@@ -513,15 +586,20 @@ async function dig() {
   );
 
   // Synthesize
-  const synthesis = await synthesize(
-    QUERY,
-    searches,
-    resonance,
-    trail
-  );
+  const synthesis = await synthesize(QUERY, searches, resonance, trail);
+
+  // Parse structured fields (Warburg + Nelson + Shulgin)
+  const parsed = parseSynthesis(synthesis);
+  const depthRating = rateDepth(synthesis, uniqueSources.length, !!parsed.emergence);
 
   const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
-  process.stderr.write(`[dig] Done in ${elapsed}s\n`);
+
+  // Operational data to stderr (Nakamoto — clean stdout)
+  process.stderr.write(
+    `[dig] Done in ${elapsed}s | Model: ${activeModel}` +
+    (activeModel !== MODEL_PRIMARY ? ` (fallback from ${MODEL_PRIMARY})` : ``) +
+    ` | Depth rating: ${depthRating}\n`
+  );
 
   // Build trail entry
   const timestamp = new Date().toISOString();
@@ -531,7 +609,7 @@ async function dig() {
   const trailEntry = [
     ``,
     `## Dig: ${QUERY}`,
-    `_${timestamp} | ${uniqueSources.length} sources | ${elapsed}s_`,
+    `_${timestamp} | ${uniqueSources.length} sources | ${elapsed}s | depth: ${depthRating}_`,
     ``,
     synthesis,
     ``,
@@ -544,9 +622,19 @@ async function dig() {
 
   appendFileSync(trailFile, trailEntry);
 
-  // Output JSON to stdout
+  // Collect all web search queries Gemini actually executed
+  const allWebSearchQueries = [...new Set(searches.flatMap((s) => s.webSearchQueries))];
+  if (allWebSearchQueries.length) {
+    process.stderr.write(`[dig] Gemini executed ${allWebSearchQueries.length} unique searches\n`);
+  }
+
+  // Output JSON to stdout — structured fields first, no operational noise
   const output = {
     query: QUERY,
+    depth_rating: depthRating,
+    findings: parsed.findings,
+    emergence: parsed.emergence,
+    pull_threads: parsed.pull_threads,
     synthesis,
     sources: uniqueSources.map((s) => ({
       title: s.title,
@@ -554,10 +642,7 @@ async function dig() {
     })),
     source_count: uniqueSources.length,
     search_count: searches.length,
-    model: activeModel,
-    model_primary: MODEL_PRIMARY,
-    used_fallback: activeModel !== MODEL_PRIMARY,
-    elapsed_seconds: parseFloat(elapsed),
+    web_search_queries: allWebSearchQueries,
     had_resonance: !!resonance,
     had_trail: !!trail,
     trail_file: trailFile,

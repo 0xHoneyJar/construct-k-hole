@@ -2,7 +2,7 @@
  * Deep Research Pipeline — Domain-Agnostic Expert Knowledge Extraction
  *
  * Multi-phase pipeline that discovers, searches, scrapes, and synthesizes
- * expert-level knowledge from the top 0.000001% of sources in any domain.
+ * expert-level knowledge from the highest-quality sources in any domain.
  *
  * Phases:
  * 1. DISCOVER  — Meta-research to identify highest-impact sub-domains
@@ -307,6 +307,8 @@ async function loadConfig(): Promise<ResearchConfig> {
 interface GeminiResponse {
   text: string;
   sources: { title: string; uri: string }[];
+  supports: { text: string; sourceIndices: number[] }[];
+  webSearchQueries: string[];
 }
 
 type GeminiCallResult =
@@ -387,7 +389,7 @@ async function geminiDirect(
             await new Promise((r) => setTimeout(r, 2000));
             continue;
           }
-          return { status: "success", response: { text: `[Search blocked by safety filter: ${reason}]`, sources: [] } };
+          return { status: "success", response: { text: `[Search blocked by safety filter: ${reason}]`, sources: [], supports: [], webSearchQueries: [] } };
         }
         return { status: "error", error: `No candidates (finishReason: ${reason})` };
       }
@@ -404,7 +406,7 @@ async function geminiDirect(
           await new Promise((r) => setTimeout(r, 2000));
           continue;
         }
-        return { status: "success", response: { text: "[Empty response from model]", sources: [] } };
+        return { status: "success", response: { text: "[Empty response from model]", sources: [], supports: [], webSearchQueries: [] } };
       }
 
       const sources = (cand.groundingMetadata?.groundingChunks ?? []).map(
@@ -414,7 +416,16 @@ async function geminiDirect(
         }),
       );
 
-      return { status: "success", response: { text, sources } };
+      const supports = (
+        cand.groundingMetadata?.groundingSupports ?? []
+      ).map((s: { segment?: { text?: string }; groundingChunkIndices?: number[] }) => ({
+        text: s.segment?.text ?? "",
+        sourceIndices: s.groundingChunkIndices ?? [],
+      }));
+
+      const webSearchQueries: string[] = cand.groundingMetadata?.webSearchQueries ?? [];
+
+      return { status: "success", response: { text, sources, supports, webSearchQueries } };
     } catch (err) {
       if (err instanceof DOMException && err.name === "AbortError") {
         log("RETRY", "Request timed out (120s)");
@@ -597,7 +608,7 @@ async function runDiscovery(config: ResearchConfig): Promise<string> {
     config.DISCOVERY_QUERIES,
     async (q) => {
       log("SEARCH", q.id);
-      const result = await gemini(q.query, { search: true, maxTokens: 4096 });
+      const result = await gemini(q.query, { search: true, maxTokens: 4096, temperature: 0.0 });
       log("DONE", `${q.id} — ${result.sources.length} sources`);
       return { id: q.id, ...result };
     },
@@ -621,7 +632,7 @@ async function runDiscovery(config: ResearchConfig): Promise<string> {
       ? `\n## Deep-Scraped Source Content\n\n${scraped.map((s) => `### ${s.title}\nURL: ${s.url}\n\n${s.content.slice(0, 5000)}`).join("\n\n---\n\n")}`
       : "";
 
-  const synthesisPrompt = `You are a senior researcher synthesizing findings to identify the most impactful research domains.
+  const synthesisPrompt = `Synthesize these findings to identify the most impactful research domains.
 
 ## Context
 ${config.SYNTHESIS_CONTEXT}
@@ -695,19 +706,9 @@ async function groundedSearch(topic: Topic): Promise<{
   const results = await parallelMap(
     topic.searchQueries,
     async (query) => {
-      const prompt = `Search for: "${query}"
+      const prompt = `What are the specific technical details, implementation patterns, and documented tradeoffs for: "${query}"? Include named practitioners, exact techniques, numeric benchmarks, and version-specific details where available.`;
 
-Find specific, technical details from real sources. Focus on:
-- Exact code patterns, implementation details, mathematical formulas
-- Specific numeric values, thresholds, ratios, benchmarks
-- Implementation details from engineering blogs, source code, conference talks
-- What the top 0.000001% professionals specifically do differently from everyone else
-- Named techniques, frameworks, libraries with version-specific details
-
-Be thorough. Extract every actionable technical detail you find.
-Prioritize practitioner content (engineering blogs, talks, source code) over tutorials and documentation.`;
-
-      return gemini(prompt, { search: true, maxTokens: 4096 });
+      return gemini(prompt, { search: true, maxTokens: 4096, temperature: 0.0 });
     },
     SEARCH_BATCH_SIZE,
   );
@@ -739,8 +740,8 @@ async function synthesize(
       ? `\n## Deep-Scraped Source Content (${scrapedContent.length} pages)\n\n${scrapedContent.map((s) => `### ${s.title}\nURL: ${s.url}\n\n${s.content.slice(0, 8000)}`).join("\n\n---\n\n")}`
       : "";
 
-  const prompt = `You are a world-class researcher synthesizing findings into a comprehensive knowledge base.
-Your goal is to capture the COMPLETE mental model that the top 0.000001% of practitioners use.
+  const prompt = `Synthesize these findings into a comprehensive knowledge base.
+Capture the complete mental model that expert practitioners use.
 
 ## Context
 ${context}
@@ -757,35 +758,21 @@ ${scrapedSection}
 ${sourceList}
 
 ## Your Task
-Extract EVERYTHING of value. Write the definitive reference for this domain.
+Extract everything of value. Write the definitive reference for this domain.
 
-### Expert Mental Models & Decision Frameworks
-- How do the top practitioners THINK about this? What is their decision-making process?
-- What do they check FIRST when something goes wrong?
-- What tradeoffs do they consciously make?
+Organize findings in the structure that best serves this specific content. Possible sections
+(use only what the data warrants — skip sections where the data is thin):
 
-### Core Techniques (with exact implementation)
-- Every technique mentioned, with complete code or step-by-step implementation
-- The WHY behind each technique — what problem it solves, what it replaces
-- Common mistakes and how experts avoid them
+- Decision frameworks and mental models (if practitioners documented how they think)
+- Core techniques with implementation details and the WHY behind each
+- Numeric values, thresholds, benchmarks (if quantitative data exists — use tables)
+- Code recipes with pitfalls and when to use each
+- Key distinctions between novice and expert approaches (if the sources discuss this)
+- Key people, sources, and what they uniquely contribute
 
-### Production Values & Thresholds
-| Parameter | Value | Context | Why This Number |
-|-----------|-------|---------|-----------------|
-
-### Code Recipes (complete, production-ready)
-Every recipe with: what it does, when to use it, what to watch out for.
-
-### Amateur vs Professional Comparison
-| Aspect | Amateur Approach | Professional Approach | Why It Matters |
-|--------|-----------------|----------------------|----------------|
-
-### Key Sources & Who to Learn From
-- Most valuable sources and what they uniquely contribute
-- Specific people to follow and what they are best at
-
-Be EXHAUSTIVE. Every technique needs code, every value needs a number, every pattern needs an example.
-This is a knowledge dump, not a summary. Completeness is the goal.`;
+Depth over coverage. If the sources are rich on one topic and thin on another,
+go deep on the rich one rather than padding the thin one.
+Every technique needs specifics, every claim needs a source.`;
 
   const result = await gemini(prompt, { search: false, maxTokens: 8192, temperature: 0.3 });
   return result.text;
@@ -796,7 +783,7 @@ async function gapAnalysis(topic: Topic, synthesis: string): Promise<string[]> {
 
   const prompt = `Given this synthesis of research on "${topic.name}":
 
-${synthesis.slice(0, 6000)}
+${synthesis.length > 12000 ? synthesis.slice(0, 6000) + "\n\n[...middle truncated...]\n\n" + synthesis.slice(-4000) : synthesis}
 
 And the focus areas we wanted to cover:
 ${topic.focusAreas.map((a) => `- ${a}`).join("\n")}
@@ -822,12 +809,8 @@ async function fillGaps(gapQueries: string[]): Promise<string[]> {
   const results = await parallelMap(
     gapQueries,
     async (query) => {
-      const prompt = `Search for: "${query}"
-Find the most specific, technical, actionable details available.
-Include exact code, formulas, numeric values, benchmarks.
-Prioritize content from recognized practitioners over generic tutorials.
-No vague descriptions — every finding must be actionable.`;
-      return gemini(prompt, { search: true, maxTokens: 3072 });
+      const prompt = `What specific technical details answer this question: "${query}"? Include exact code patterns, numeric values, benchmarks, and implementation specifics from recognized practitioners.`;
+      return gemini(prompt, { search: true, maxTokens: 3072, temperature: 0.0 });
     },
     gapQueries.length,
   );
@@ -843,10 +826,10 @@ async function finalSynthesis(
 ): Promise<string> {
   log("FINAL", `${topic.id} — merging`);
 
-  const prompt = `You are producing the FINAL, DEFINITIVE research document for: "${topic.name}"
+  const prompt = `Produce the FINAL research document for: "${topic.name}"
 
-This document will become part of a permanent knowledge base used to build expert-level capability in this domain.
-It must be so thorough that someone reading ONLY this document could replicate expert-level work.
+This becomes part of a permanent knowledge base. It must be thorough enough
+that someone reading ONLY this document could replicate expert-level work.
 
 ## Context
 ${context}
@@ -859,36 +842,20 @@ ${firstSynthesis}
 ${gapFindings.join("\n\n---\n\n")}
 
 ## Instructions
-Merge into a single, comprehensive, non-redundant document:
+Merge into a single, comprehensive, non-redundant document. Use the structure that best
+serves this content — let the data shape the sections, not a rigid template.
 
-### Expert Mental Model
-How do the top 0.000001% think about this domain? What is their decision framework?
-What do they optimize for? What do they check when something goes wrong?
+Essential elements (include where the data supports them):
 
-### Core Concepts (with full explanations)
-Every key concept explained clearly enough that someone could understand AND implement it.
-Include the WHY — not just what to do, but why it works and what problem it solves.
+- How expert practitioners think about this domain — their decision framework and priorities
+- Core concepts explained clearly enough to understand AND implement, with the WHY
+- Complete code recipes with pitfalls and usage context
+- Numeric values, thresholds, and benchmarks in table format with reasoning
+- Key people, what they are known for, and recommended learning order
 
-### Complete Code Recipes
-Production-ready implementations. Each recipe must include:
-- What it does and when to use it
-- The complete code (not snippets — full implementations)
-- Common pitfalls and how to avoid them
-
-### Production Values & Reference Tables
-Exact values, thresholds, ratios, benchmarks — everything numeric in table format.
-Include the reasoning behind each number.
-
-### Amateur vs Professional Comparison
-| Aspect | Amateur Approach | Professional Approach | Why It Matters |
-
-### Key People, Sources & Learning Path
-Who to study, what they are known for, and the recommended order to learn concepts.
-
-IMPORTANT: Be EXHAUSTIVE. This is a knowledge dump, not a summary.
-Every technique, every value, every code pattern.
-Remove redundancy but keep all unique information.
-Length is correct — completeness is the goal.`;
+Remove redundancy but keep all unique information. Depth over padding —
+go deep where the sources are rich rather than filling every possible section.
+Every claim should trace to the research findings above.`;
 
   const result = await gemini(prompt, { search: false, maxTokens: 16384, temperature: 0.3 });
   return result.text;
@@ -1039,7 +1006,7 @@ async function main() {
   // Phase 3: Cross-topic synthesis
   console.log(`\n=== Phase 3: Cross-Topic Synthesis ===\n`);
 
-  const crossPrompt = `You are synthesizing ${topicResults.length} deep research reports into a unified knowledge base.
+  const crossPrompt = `Synthesize ${topicResults.length} deep research reports into a unified knowledge base.
 
 ## Context
 ${config.SYNTHESIS_CONTEXT}

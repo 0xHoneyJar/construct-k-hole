@@ -1,8 +1,8 @@
 schema_version: 3
 name: K-Hole
 slug: k-hole
-version: 1.1.0
-description: Depth engine for intentional exploration. Discovers, descends, and synthesizes domain knowledge from the top 0.000001% of sources. Depth over breadth, always.
+version: 1.2.0
+description: Depth engine for intentional exploration. Discovers, descends, and synthesizes domain knowledge through grounded search and multi-voice synthesis. Depth over breadth, always.
 author: 0xHoneyJar
 license: MIT
 skills:

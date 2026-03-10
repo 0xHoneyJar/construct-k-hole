@@ -28,9 +28,9 @@ export interface Topic {
 export const DISCOVERY_QUERIES: DiscoveryQuery[] = [
   {
     id: "landscape",
-    query: `Who are the top 0.000001% practitioners in [YOUR DOMAIN] and what specific techniques
-do they use that differ from typical tutorials? Search for engineering blogs, conference talks,
-and open source implementations. What separates amateur from expert work?`,
+    query: `Who are the leading practitioners and researchers in [YOUR DOMAIN] and what specific
+techniques have they documented that differ from standard tutorials? Include named individuals,
+their published work, and what distinguishes expert-level approaches in this field.`,
   },
   {
     id: "techniques",
