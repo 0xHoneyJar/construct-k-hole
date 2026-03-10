@@ -41,7 +41,7 @@ The user wants to run the research pipeline. Execute the `deep-research` skill w
    ```bash
    npx tsx scripts/deep-research.ts --config <domain>
    ```
-   Add flags as needed: `--model <model>` to override default, `--domain <name>` for domain selection.
+   Add flags as needed: `--model <model>` to override default, `--topic <id>` for single topic, `--discover-only` for discovery phase only.
 3. Monitor progress and report status
 4. Review output quality after completion
 5. Identify any areas needing deeper investigation

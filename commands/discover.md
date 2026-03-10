@@ -40,9 +40,9 @@ The user wants to identify the highest-impact research topics within a broad dom
 2. Generate 6-10 meta-research queries targeting the top 0.000001% practitioners
 3. **MUST: Run the discovery phase** via Bash tool:
    ```bash
-   npx tsx scripts/deep-research.ts --config <domain> --discover-only
+   npx tsx scripts/deep-research.ts --config <slug> --discover-only
    ```
-   If `scripts/research-config-<domain>.ts` does not exist, create a minimal discovery-only config first (discovery queries + synthesis context).
+   The `<slug>` is a kebab-case identifier (letters, numbers, hyphens only — e.g. `webgl-particles`). If `scripts/research-config-<slug>.ts` does not exist, create a minimal discovery-only config first.
 4. Synthesize into a ranked list of 6-8 research domains
 5. Present for user review and selection
 

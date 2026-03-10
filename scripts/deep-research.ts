@@ -134,7 +134,17 @@ interface ResonanceProfile {
 const MAX_RESONANCE_SIZE = 50_000; // 50KB cap on resonance profile
 
 function loadResonanceProfile(): ResonanceProfile | null {
-  for (const dir of [join(SCRIPT_DIR, ".."), SCRIPT_DIR]) {
+  // Walk up from script directory to find resonance profile at any level
+  // (handles pack installs where project root is many levels up)
+  const searchDirs: string[] = [];
+  let d = SCRIPT_DIR;
+  while (true) {
+    searchDirs.push(d);
+    const parent = join(d, "..");
+    if (parent === d) break;
+    d = parent;
+  }
+  for (const dir of searchDirs) {
     for (const name of ["resonance-profile.yaml", "resonance-profile.yml", "taste.md"]) {
       const p = join(dir, name);
       if (!existsSync(p)) continue;
@@ -1011,7 +1021,9 @@ async function main() {
     async (topic) => {
       const result = await researchTopic(topic, config.SYNTHESIS_CONTEXT);
 
-      const filename = `${timestamp}_${CONFIG_NAME}_${topic.id}_deep.md`;
+      // Sanitize topic.id for safe filename construction
+      const safeId = topic.id.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 100);
+      const filename = `${timestamp}_${CONFIG_NAME}_${safeId}_deep.md`;
       const filepath = join(OUTPUT_DIR, filename);
       writeFileSync(
         filepath,

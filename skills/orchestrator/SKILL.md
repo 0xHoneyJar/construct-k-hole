@@ -36,7 +36,7 @@ The orchestrator runs four phases in sequence:
 **What happens:**
 1. **MUST run via Bash tool:**
    ```bash
-   npx tsx scripts/deep-research.ts --config <domain> --discover-only
+   npx tsx scripts/deep-research.ts --config <slug> --discover-only
    ```
 2. The script runs 6-10 grounded meta-research queries — Gemini + Google Search finds the landscape: who the top practitioners are, what the key sub-domains are, what separates amateurs from experts
 3. Synthesize findings into a ranked list of 6-8 high-impact research topics
@@ -69,7 +69,7 @@ The orchestrator runs four phases in sequence:
 **What happens:**
 1. **MUST run via Bash tool:**
    ```bash
-   npx tsx scripts/deep-research.ts --config <domain>
+   npx tsx scripts/deep-research.ts --config <slug>
    ```
    Add `--model <model>` to override default. Add `FORGE_MODEL=<model>` env var for sticky override.
 2. For each topic, the script runs:

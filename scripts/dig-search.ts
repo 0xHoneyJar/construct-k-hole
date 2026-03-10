@@ -288,19 +288,23 @@ async function gemini(
 // ─── Resonance Profile ───────────────────────────────────────────
 
 function loadResonance(): string | null {
-  const candidates = [
-    RESONANCE_PATH,
-    join(SCRIPT_DIR, "..", "resonance-profile.yaml"),
-    join(SCRIPT_DIR, "..", "resonance-profile.yml"),
-    join(process.cwd(), "resonance-profile.yaml"),
-    join(process.cwd(), "resonance-profile.yml"),
-    join(process.cwd(), "taste.md"),
-  ].filter(Boolean) as string[];
+  // If explicit path provided, use it directly
+  if (RESONANCE_PATH && existsSync(RESONANCE_PATH)) {
+    return readFileSync(RESONANCE_PATH, "utf-8");
+  }
 
-  for (const p of candidates) {
-    if (existsSync(p)) {
-      return readFileSync(p, "utf-8");
+  // Walk up from script directory to find resonance profile at any level
+  // (handles pack installs where project root is many levels up)
+  const names = ["resonance-profile.yaml", "resonance-profile.yml", "taste.md"];
+  let d = SCRIPT_DIR;
+  while (true) {
+    for (const name of names) {
+      const p = join(d, name);
+      if (existsSync(p)) return readFileSync(p, "utf-8");
     }
+    const parent = join(d, "..");
+    if (parent === d) break;
+    d = parent;
   }
   return null;
 }
@@ -308,8 +312,20 @@ function loadResonance(): string | null {
 // ─── Trail Context ───────────────────────────────────────────────
 
 function loadTrail(): string | null {
-  if (!TRAIL_PATH || !existsSync(TRAIL_PATH)) return null;
-  const content = readFileSync(TRAIL_PATH, "utf-8");
+  if (!TRAIL_PATH) return null;
+
+  // Validate read path — must be a .md file inside research-output/
+  const candidate = resolve(process.cwd(), TRAIL_PATH);
+  const rel = relative(OUTPUT_DIR, candidate);
+  if (!rel || rel.startsWith("..") || rel.includes(":") || !candidate.endsWith(".md")) {
+    process.stderr.write(
+      `[dig] Warning: --trail read path outside research-output/. Ignoring trail.\n`
+    );
+    return null;
+  }
+
+  if (!existsSync(candidate)) return null;
+  const content = readFileSync(candidate, "utf-8");
   // Keep context manageable — last 4000 chars
   return content.length > 4000 ? content.slice(-4000) : content;
 }
