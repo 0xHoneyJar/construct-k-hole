@@ -283,6 +283,18 @@ interface GeminiResponse {
   sources: { title: string; uri: string }[];
 }
 
+type GeminiCallResult =
+  | { status: "success"; response: GeminiResponse }
+  | { status: "model_not_found"; error: string }
+  | { status: "error"; error: string };
+
+function isModelNotFound(status: number, body: string): boolean {
+  if (status !== 404) return false;
+  const lower = body.toLowerCase();
+  return lower.includes("not_found") || lower.includes("not found")
+    || lower.includes("deprecated") || lower.includes("is not available");
+}
+
 async function geminiDirect(
   model: string,
   prompt: string,
@@ -292,7 +304,7 @@ async function geminiDirect(
     temperature?: number;
     retries?: number;
   },
-): Promise<{ response?: GeminiResponse; modelNotFound?: boolean; error?: string }> {
+): Promise<GeminiCallResult> {
   const { search = false, maxTokens = 8192, temperature = 0.7, retries = 3 } = opts ?? {};
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${GEMINI_KEY}`;
 
@@ -306,10 +318,10 @@ async function geminiDirect(
   }
 
   for (let attempt = 0; attempt <= retries; attempt++) {
-    try {
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 120_000);
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 120_000);
 
+    try {
       const res = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -317,28 +329,24 @@ async function geminiDirect(
         signal: controller.signal,
       });
 
-      clearTimeout(timeout);
-
-      // Model deprecated or not found — signal caller to try fallback
-      if (res.status === 404) {
-        const err = await res.text();
-        if (err.includes("not found") || err.includes("deprecated")) {
-          return { modelNotFound: true, error: `${model}: ${err.slice(0, 150)}` };
-        }
-      }
-
-      if (res.status === 429 || res.status >= 500) {
-        if (attempt < retries) {
-          const wait = (attempt + 1) * 4000 + Math.random() * 3000;
-          log("RETRY", `${res.status} — waiting ${(wait / 1000).toFixed(1)}s (attempt ${attempt + 1}/${retries})`);
-          await new Promise((r) => setTimeout(r, wait));
-          continue;
-        }
-      }
-
+      // Read body exactly once for error responses
       if (!res.ok) {
-        const err = await res.text();
-        throw new Error(`Gemini ${res.status}: ${err.slice(0, 300)}`);
+        const errText = await res.text();
+
+        if (isModelNotFound(res.status, errText)) {
+          return { status: "model_not_found", error: `${model}: ${errText.slice(0, 150)}` };
+        }
+
+        if (res.status === 429 || res.status >= 500) {
+          if (attempt < retries) {
+            const wait = (attempt + 1) * 4000 + Math.random() * 3000;
+            log("RETRY", `${res.status} — waiting ${(wait / 1000).toFixed(1)}s (attempt ${attempt + 1}/${retries})`);
+            await new Promise((r) => setTimeout(r, wait));
+            continue;
+          }
+        }
+
+        return { status: "error", error: `Gemini ${res.status}: ${errText.slice(0, 300)}` };
       }
 
       const data = await res.json();
@@ -353,9 +361,9 @@ async function geminiDirect(
             await new Promise((r) => setTimeout(r, 2000));
             continue;
           }
-          return { response: { text: `[Search blocked by safety filter: ${reason}]`, sources: [] } };
+          return { status: "success", response: { text: `[Search blocked by safety filter: ${reason}]`, sources: [] } };
         }
-        throw new Error(`No candidates in response (finishReason: ${reason})`);
+        return { status: "error", error: `No candidates (finishReason: ${reason})` };
       }
 
       const text =
@@ -370,7 +378,7 @@ async function geminiDirect(
           await new Promise((r) => setTimeout(r, 2000));
           continue;
         }
-        return { response: { text: "[Empty response from model]", sources: [] } };
+        return { status: "success", response: { text: "[Empty response from model]", sources: [] } };
       }
 
       const sources = (cand.groundingMetadata?.groundingChunks ?? []).map(
@@ -380,7 +388,7 @@ async function geminiDirect(
         }),
       );
 
-      return { response: { text, sources } };
+      return { status: "success", response: { text, sources } };
     } catch (err) {
       if (err instanceof DOMException && err.name === "AbortError") {
         log("RETRY", "Request timed out (120s)");
@@ -391,11 +399,13 @@ async function geminiDirect(
         await new Promise((r) => setTimeout(r, wait));
         continue;
       }
-      throw err;
+      return { status: "error", error: String(err) };
+    } finally {
+      clearTimeout(timeout);
     }
   }
 
-  throw new Error("Exhausted retries");
+  return { status: "error", error: "Exhausted retries" };
 }
 
 async function gemini(
@@ -407,29 +417,36 @@ async function gemini(
     retries?: number;
   },
 ): Promise<GeminiResponse> {
-  // Try active model first
-  const result = await geminiDirect(MODEL, prompt, opts);
-  if (result.response) return result.response;
+  const modelsToTry = [MODEL, ...FORGE_FALLBACK_MODELS.filter(m => m !== MODEL)];
+  let lastError = "";
 
-  // Model not found — walk the fallback chain
-  if (result.modelNotFound) {
-    log("WARN", `Model ${MODEL} not found, trying fallbacks...`);
-
-    for (const fallback of FORGE_FALLBACK_MODELS) {
-      if (fallback === MODEL) continue;
-      log("INFO", `Trying fallback model: ${fallback}`);
-      const fbResult = await geminiDirect(fallback, prompt, opts);
-      if (fbResult.response) {
-        MODEL = fallback; // Sticky for rest of session
-        log("INFO", `Fell back to ${fallback} (sticky for this session)`);
-        return fbResult.response;
-      }
-      if (fbResult.modelNotFound) continue;
+  for (const model of modelsToTry) {
+    if (model !== modelsToTry[0]) {
+      log("INFO", `Trying fallback model: ${model}`);
     }
-    throw new Error(`All models unavailable. Tried: ${MODEL_PRIMARY}, ${FORGE_FALLBACK_MODELS.join(", ")}`);
+
+    const result = await geminiDirect(model, prompt, opts);
+
+    if (result.status === "success") {
+      if (model !== MODEL) {
+        MODEL = model; // Sticky for rest of session
+        log("INFO", `Fell back to ${model} (sticky for this session)`);
+      }
+      return result.response;
+    }
+
+    lastError = result.error;
+
+    if (result.status === "model_not_found") {
+      log("WARN", `Model ${model} not found, continuing fallback chain...`);
+      continue;
+    }
+
+    // Transient error after retries exhausted — also try next model
+    log("WARN", `Model ${model} failed (${result.error.slice(0, 80)}), trying next...`);
   }
 
-  throw new Error(result.error || "Unknown Gemini error");
+  throw new Error(`All models failed. Last error: ${lastError}. Tried: ${modelsToTry.join(", ")}`);
 }
 
 // ─── Firecrawl API (Optional Deep Scraping) ─────────────────────

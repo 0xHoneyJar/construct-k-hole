@@ -97,6 +97,19 @@ interface GeminiResponse {
   sources: { title: string; uri: string }[];
 }
 
+type GeminiCallResult =
+  | { status: "success"; response: GeminiResponse }
+  | { status: "model_not_found"; error: string }
+  | { status: "error"; error: string };
+
+function isModelNotFound(status: number, body: string): boolean {
+  if (status !== 404) return false;
+  const lower = body.toLowerCase();
+  // Gemini returns JSON with error.status or plain text — check both
+  return lower.includes("not_found") || lower.includes("not found")
+    || lower.includes("deprecated") || lower.includes("is not available");
+}
+
 async function geminiCall(
   model: string,
   prompt: string,
@@ -105,7 +118,7 @@ async function geminiCall(
     maxTokens?: number;
     temperature?: number;
   }
-): Promise<{ response?: GeminiResponse; modelNotFound?: boolean; error?: string }> {
+): Promise<GeminiCallResult> {
   const {
     search = false,
     maxTokens = 8192,
@@ -124,10 +137,10 @@ async function geminiCall(
   }
 
   for (let attempt = 0; attempt < 3; attempt++) {
-    try {
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 60_000);
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 60_000);
 
+    try {
       const res = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -135,30 +148,26 @@ async function geminiCall(
         signal: controller.signal,
       });
 
-      clearTimeout(timeout);
-
-      // Model deprecated or not found — signal caller to try fallback
-      if (res.status === 404) {
-        const err = await res.text();
-        if (err.includes("not found") || err.includes("deprecated")) {
-          return { modelNotFound: true, error: `${model}: ${err.slice(0, 150)}` };
-        }
-      }
-
-      if (res.status === 429 || res.status >= 500) {
-        if (attempt < 2) {
-          const wait = (attempt + 1) * 3000 + Math.random() * 2000;
-          process.stderr.write(
-            `[dig] Retry ${attempt + 1}/3 after ${res.status}...\n`
-          );
-          await new Promise((r) => setTimeout(r, wait));
-          continue;
-        }
-      }
-
+      // Read body exactly once for error responses
       if (!res.ok) {
-        const err = await res.text();
-        throw new Error(`Gemini ${res.status}: ${err.slice(0, 200)}`);
+        const errText = await res.text();
+
+        if (isModelNotFound(res.status, errText)) {
+          return { status: "model_not_found", error: `${model}: ${errText.slice(0, 150)}` };
+        }
+
+        if (res.status === 429 || res.status >= 500) {
+          if (attempt < 2) {
+            const wait = (attempt + 1) * 3000 + Math.random() * 2000;
+            process.stderr.write(
+              `[dig] Retry ${attempt + 1}/3 after ${res.status}...\n`
+            );
+            await new Promise((r) => setTimeout(r, wait));
+            continue;
+          }
+        }
+
+        return { status: "error", error: `Gemini ${res.status}: ${errText.slice(0, 200)}` };
       }
 
       const data = await res.json();
@@ -169,15 +178,15 @@ async function geminiCall(
         const reason = cand?.finishReason || "NO_CANDIDATES";
         if (reason === "SAFETY" || reason === "RECITATION") {
           process.stderr.write(
-            `[dig] Response blocked (${reason}), retrying with simpler prompt...\n`
+            `[dig] Response blocked (${reason}), retrying...\n`
           );
           if (attempt < 2) {
             await new Promise((r) => setTimeout(r, 2000));
             continue;
           }
-          return { response: { text: `[Search blocked by safety filter: ${reason}]`, sources: [] } };
+          return { status: "success", response: { text: `[Search blocked by safety filter: ${reason}]`, sources: [] } };
         }
-        throw new Error(`No candidates in Gemini response (finishReason: ${reason})`);
+        return { status: "error", error: `No candidates (finishReason: ${reason})` };
       }
 
       const text =
@@ -192,7 +201,7 @@ async function geminiCall(
           await new Promise((r) => setTimeout(r, 2000));
           continue;
         }
-        return { response: { text: "[Empty response from model]", sources: [] } };
+        return { status: "success", response: { text: "[Empty response from model]", sources: [] } };
       }
 
       const sources = (
@@ -202,7 +211,7 @@ async function geminiCall(
         uri: c.web?.uri ?? "",
       }));
 
-      return { response: { text, sources } };
+      return { status: "success", response: { text, sources } };
     } catch (err) {
       if (err instanceof DOMException && err.name === "AbortError") {
         process.stderr.write(`[dig] Request timed out (60s), retrying...\n`);
@@ -213,11 +222,13 @@ async function geminiCall(
         );
         continue;
       }
-      throw err;
+      return { status: "error", error: String(err) };
+    } finally {
+      clearTimeout(timeout);
     }
   }
 
-  throw new Error("Exhausted retries");
+  return { status: "error", error: "Exhausted retries" };
 }
 
 async function gemini(
@@ -228,31 +239,36 @@ async function gemini(
     temperature?: number;
   }
 ): Promise<GeminiResponse> {
-  // Try active model first
-  const result = await geminiCall(activeModel, prompt, opts);
-  if (result.response) return result.response;
+  const modelsToTry = [activeModel, ...DIG_FALLBACK_MODELS.filter(m => m !== activeModel)];
+  let lastError = "";
 
-  // Model not found — walk the fallback chain
-  if (result.modelNotFound) {
-    process.stderr.write(
-      `[dig] Model ${activeModel} not found, trying fallbacks...\n`
-    );
-
-    for (const fallback of DIG_FALLBACK_MODELS) {
-      if (fallback === activeModel) continue;
-      process.stderr.write(`[dig] Trying ${fallback}...\n`);
-      const fbResult = await geminiCall(fallback, prompt, opts);
-      if (fbResult.response) {
-        activeModel = fallback; // Sticky for rest of session
-        process.stderr.write(`[dig] Fell back to ${fallback} (sticky for this session)\n`);
-        return fbResult.response;
-      }
-      if (fbResult.modelNotFound) continue;
+  for (const model of modelsToTry) {
+    if (model !== modelsToTry[0]) {
+      process.stderr.write(`[dig] Trying fallback model: ${model}...\n`);
     }
-    throw new Error(`All models unavailable. Tried: ${activeModel}, ${DIG_FALLBACK_MODELS.join(", ")}`);
+
+    const result = await geminiCall(model, prompt, opts);
+
+    if (result.status === "success") {
+      if (model !== activeModel) {
+        activeModel = model; // Sticky for rest of session
+        process.stderr.write(`[dig] Fell back to ${model} (sticky for this session)\n`);
+      }
+      return result.response;
+    }
+
+    lastError = result.error;
+
+    if (result.status === "model_not_found") {
+      process.stderr.write(`[dig] Model ${model} not found, continuing fallback chain...\n`);
+      continue;
+    }
+
+    // Transient error after retries exhausted — also try next model
+    process.stderr.write(`[dig] Model ${model} failed (${result.error.slice(0, 80)}), trying next...\n`);
   }
 
-  throw new Error(result.error || "Unknown Gemini error");
+  throw new Error(`All models failed. Last error: ${lastError}. Tried: ${modelsToTry.join(", ")}`);
 }
 
 // ─── Resonance Profile ───────────────────────────────────────────
