@@ -36,7 +36,7 @@ The orchestrator runs four phases in sequence:
 **What happens:**
 1. **MUST run via Bash tool:**
    ```bash
-   npx tsx scripts/deep-research.ts --discover-only --domain "<domain>"
+   npx tsx scripts/deep-research.ts --config <domain> --discover-only
    ```
 2. The script runs 6-10 grounded meta-research queries — Gemini + Google Search finds the landscape: who the top practitioners are, what the key sub-domains are, what separates amateurs from experts
 3. Synthesize findings into a ranked list of 6-8 high-impact research topics

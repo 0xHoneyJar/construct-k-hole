@@ -22,11 +22,12 @@ import {
   existsSync,
   appendFileSync,
 } from "fs";
-import { join } from "path";
+import { join, dirname, resolve, relative } from "path";
+import { fileURLToPath } from "url";
 
 // ─── Config ─────────────────────────────────────────────────────
 
-const SCRIPT_DIR = new URL(".", import.meta.url).pathname;
+const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 const OUTPUT_DIR = join(SCRIPT_DIR, "research-output");
 
 // Load .env — walk up from script directory to filesystem root.
@@ -313,6 +314,25 @@ function loadTrail(): string | null {
   return content.length > 4000 ? content.slice(-4000) : content;
 }
 
+function resolveTrailPath(date: string): string {
+  const defaultTrail = join(OUTPUT_DIR, `dig-session-${date}.md`);
+  if (!TRAIL_PATH) return defaultTrail;
+
+  const candidate = resolve(process.cwd(), TRAIL_PATH);
+  // Allow writes to OUTPUT_DIR or any .md file under the construct root
+  const rel = relative(OUTPUT_DIR, candidate);
+  const insideOutput = rel && !rel.startsWith("..") && !rel.includes(":");
+
+  if (!insideOutput || !candidate.endsWith(".md")) {
+    process.stderr.write(
+      `[dig] Warning: --trail path outside research-output/. Using default.\n`
+    );
+    return defaultTrail;
+  }
+
+  return candidate;
+}
+
 // ─── Search Query Generation ─────────────────────────────────────
 
 function buildSearchQueries(thread: string, depth: number): string[] {
@@ -490,9 +510,7 @@ async function dig() {
   // Build trail entry
   const timestamp = new Date().toISOString();
   const date = timestamp.split("T")[0];
-  const trailFile =
-    TRAIL_PATH ||
-    join(OUTPUT_DIR, `dig-session-${date}.md`);
+  const trailFile = resolveTrailPath(date);
 
   const trailEntry = [
     ``,

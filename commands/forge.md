@@ -41,8 +41,9 @@ The user wants to master a domain. Run the complete pipeline:
 1. **Understand their goal** — What domain? What do they already know? What will they build?
 2. **Discover sub-domains** — MUST run via Bash tool:
    ```bash
-   npx tsx scripts/deep-research.ts --discover-only --domain "<domain>"
+   npx tsx scripts/deep-research.ts --config <domain> --discover-only
    ```
+   If no config exists yet, generate a minimal discovery-only config first.
 3. **Generate research config** — Create the config file from discovery results
 4. **Execute deep research** — MUST run via Bash tool:
    ```bash

@@ -27,12 +27,13 @@
  */
 
 import { readFileSync, writeFileSync, mkdirSync, existsSync, renameSync, rmSync } from "fs";
-import { join, basename } from "path";
+import { join, basename, dirname } from "path";
+import { fileURLToPath } from "url";
 import { createInterface } from "readline";
 
 // ─── Config ─────────────────────────────────────────────────────
 
-const SCRIPT_DIR = new URL(".", import.meta.url).pathname;
+const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 const OUTPUT_DIR = join(SCRIPT_DIR, "research-output");
 
 // Load .env — walk up from script directory to filesystem root.
@@ -94,6 +95,10 @@ const CONFIG_NAME = getArg("config");
 if (!CONFIG_NAME) {
   console.error("Usage: npx tsx scripts/deep-research.ts --config <name>");
   console.error("Example: npx tsx scripts/deep-research.ts --config animation");
+  process.exit(1);
+}
+if (!/^[a-zA-Z0-9_-]+$/.test(CONFIG_NAME)) {
+  console.error("Invalid --config value. Use only letters, numbers, underscore, and hyphen.");
   process.exit(1);
 }
 
