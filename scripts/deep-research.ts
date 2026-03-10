@@ -58,13 +58,15 @@ function loadEnv() {
 }
 loadEnv();
 
-const GEMINI_KEY = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
+// Strip wrapping quotes — handles both .env parser output and shell-injected values
+const GEMINI_KEY = (process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || "")
+  .replace(/^["']|["']$/g, "").trim();
 if (!GEMINI_KEY) {
   console.error("Missing GEMINI_API_KEY or GOOGLE_API_KEY in .env");
   process.exit(1);
 }
 
-const FIRECRAWL_KEY = process.env.FIRECRAWL_API_KEY;
+const FIRECRAWL_KEY = (process.env.FIRECRAWL_API_KEY || "").replace(/^["']|["']$/g, "").trim();
 const HAS_FIRECRAWL = !!FIRECRAWL_KEY;
 
 mkdirSync(OUTPUT_DIR, { recursive: true });

@@ -52,7 +52,10 @@ function loadEnv() {
 }
 loadEnv();
 
-const GEMINI_KEY = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
+// Strip wrapping quotes — handles both .env parser output and shell-injected values
+// where agents pass GOOGLE_API_KEY="$(grep ...)" with literal quotes leaking through
+const GEMINI_KEY = (process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || "")
+  .replace(/^["']|["']$/g, "").trim();
 if (!GEMINI_KEY) {
   console.log(
     JSON.stringify({
