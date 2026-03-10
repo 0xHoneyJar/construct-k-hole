@@ -28,7 +28,22 @@ import { fileURLToPath } from "url";
 // ─── Config ─────────────────────────────────────────────────────
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
-const OUTPUT_DIR = join(SCRIPT_DIR, "research-output");
+
+// Output dir: prefer project-level grimoires/k-hole/ when installed as a pack,
+// fall back to script-local research-output/ for standalone repos
+function resolveOutputDir(): string {
+  // Detect pack install by checking if we're inside .claude/constructs/packs/
+  const packMarker = ".claude/constructs/packs/";
+  const idx = SCRIPT_DIR.indexOf(packMarker);
+  if (idx !== -1) {
+    const projectRoot = SCRIPT_DIR.slice(0, idx);
+    const projectOutput = join(projectRoot, "grimoires", "k-hole", "research-output");
+    mkdirSync(projectOutput, { recursive: true });
+    return projectOutput;
+  }
+  return join(SCRIPT_DIR, "research-output");
+}
+const OUTPUT_DIR = resolveOutputDir();
 
 // Load .env — walk up from script directory to filesystem root.
 // Handles both standalone repos (.env one level up) and installed packs
@@ -154,7 +169,9 @@ async function geminiCall(
 
   for (let attempt = 0; attempt < 3; attempt++) {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 60_000);
+    // Grounded search with google_search tool needs more time than plain generation
+    const timeoutMs = search ? 90_000 : 60_000;
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
     try {
       const res = await fetch(url, {
@@ -227,6 +244,18 @@ async function geminiCall(
         uri: c.web?.uri ?? "",
       }));
 
+      // Also extract from searchEntryPoint if available (sometimes has cleaner URLs)
+      const searchEntry = cand.groundingMetadata?.searchEntryPoint?.renderedContent;
+      if (searchEntry) {
+        const hrefMatches = searchEntry.matchAll(/href="(https?:\/\/[^"]+)"/g);
+        for (const m of hrefMatches) {
+          const href = m[1];
+          if (!href.includes("vertexaisearch.cloud.google.com") && !sources.some((s: {uri: string}) => s.uri === href)) {
+            sources.push({ title: new URL(href).hostname, uri: href });
+          }
+        }
+      }
+
       const supports = (
         cand.groundingMetadata?.groundingSupports ?? []
       ).map((s: { segment?: { text?: string }; groundingChunkIndices?: number[] }) => ({
@@ -239,7 +268,7 @@ async function geminiCall(
       return { status: "success", response: { text, sources, supports, webSearchQueries } };
     } catch (err) {
       if (err instanceof DOMException && err.name === "AbortError") {
-        process.stderr.write(`[dig] Request timed out (60s), retrying...\n`);
+        process.stderr.write(`[dig] Request timed out (${timeoutMs / 1000}s), retrying...\n`);
       }
       if (attempt < 2) {
         await new Promise((r) =>
@@ -561,9 +590,9 @@ async function dig() {
           maxTokens: 4096,
           temperature: 0.0,
         });
-        if (result.webSearchQueries.length) {
-          process.stderr.write(`[dig] Search ${i + 1}: ${result.webSearchQueries.join(" | ")}\n`);
-        }
+        process.stderr.write(
+          `[dig] Search ${i + 1}/${queries.length}: ${result.sources.length} sources, ${result.webSearchQueries.length} web queries\n`
+        );
         return {
           query,
           text: result.text,
@@ -579,7 +608,7 @@ async function dig() {
   const allSources = searches.flatMap((s) => s.sources);
   const uniqueSources = [
     ...new Map(allSources.map((s) => [s.uri, s])).values(),
-  ].filter((s) => s.uri.startsWith("http"));
+  ].filter((s) => s.uri.startsWith("http") && !s.uri.includes("vertexaisearch.cloud.google.com"));
 
   process.stderr.write(
     `[dig] ${uniqueSources.length} unique sources found. Synthesizing...\n`

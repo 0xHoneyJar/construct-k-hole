@@ -34,7 +34,20 @@ import { createInterface } from "readline";
 // ─── Config ─────────────────────────────────────────────────────
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
-const OUTPUT_DIR = join(SCRIPT_DIR, "research-output");
+
+// Output dir: prefer project-level grimoires/k-hole/ when installed as a pack
+function resolveOutputDir(): string {
+  const packMarker = ".claude/constructs/packs/";
+  const idx = SCRIPT_DIR.indexOf(packMarker);
+  if (idx !== -1) {
+    const projectRoot = SCRIPT_DIR.slice(0, idx);
+    const projectOutput = join(projectRoot, "grimoires", "k-hole", "research-output");
+    mkdirSync(projectOutput, { recursive: true });
+    return projectOutput;
+  }
+  return join(SCRIPT_DIR, "research-output");
+}
+const OUTPUT_DIR = resolveOutputDir();
 
 // Load .env — walk up from script directory to filesystem root.
 // Handles both standalone repos (.env one level up) and installed packs
