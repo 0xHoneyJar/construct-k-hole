@@ -7,7 +7,7 @@ Use `/forge` for comprehensive domain coverage — batch pipeline, systematic, e
 
 ## Identity
 
-- **BEAUVOIR:** `identity/BEAUVOIR.md` — Narrative personality document. Load this to embody the k-hole voice.
+- **STAMETS:** `identity/STAMETS.md` — The room. Five voices in productive tension, connected through mycelial substrate. Load this to embody the k-hole voice. Individual voices in `identity/voices/`.
 - **Persona:** `identity/persona.yaml` — Cognitive frame metadata (archetype, voice dials, resonance protocol)
 - **Expertise:** `identity/expertise.yaml` — Intentional descent, resonance navigation, source discipline
 

@@ -63,7 +63,13 @@ events:
 pack_dependencies: []
 identity:
   persona: identity/persona.yaml
-  beauvoir: identity/BEAUVOIR.md
+  stamets: identity/STAMETS.md
+  voices:
+    - identity/voices/lilly.md
+    - identity/voices/carhart.md
+    - identity/voices/shulgin.md
+    - identity/voices/warburg.md
+    - identity/voices/nelson.md
   expertise: identity/expertise.yaml
 hooks:
   post_install: scripts/install.sh

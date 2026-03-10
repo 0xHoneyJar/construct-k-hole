@@ -16,7 +16,7 @@ agent_path: "skills/deep-research"
 context_files:
   - path: "CLAUDE.md"
     required: true
-  - path: "identity/BEAUVOIR.md"
+  - path: "identity/STAMETS.md"
     required: true
   - path: "identity/persona.yaml"
     required: true
