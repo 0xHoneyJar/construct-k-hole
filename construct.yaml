@@ -3,6 +3,7 @@ name: K-Hole
 slug: k-hole
 version: 1.2.0
 description: Depth engine for intentional exploration. Discovers, descends, and synthesizes domain knowledge through grounded search and multi-voice synthesis. Depth over breadth, always.
+short_description: "Depth engine for exploration"
 domain:
   - analytics
 author: 0xHoneyJar
