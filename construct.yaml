@@ -63,8 +63,11 @@ events:
         topic: string
         anchor: string
         excerpt: string
-  consumes: []
-pack_dependencies: []
+type: skill-pack
+composition_paths:
+  writes:
+    - grimoires/resonance/
+    - grimoires/k-hole/
 identity:
   persona: identity/persona.yaml
   stamets: identity/STAMETS.md
