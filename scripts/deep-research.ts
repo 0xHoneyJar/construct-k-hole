@@ -26,7 +26,7 @@
  *   npx tsx scripts/deep-research.ts --config <name> --fast
  */
 
-import { readFileSync, writeFileSync, mkdirSync, existsSync, renameSync, rmSync } from "fs";
+import { readFileSync, writeFileSync, writeSync, mkdirSync, existsSync, renameSync, rmSync } from "fs";
 import { join, basename, dirname } from "path";
 import { fileURLToPath } from "url";
 import { createInterface } from "readline";
@@ -214,7 +214,7 @@ function resonanceContext(): string {
 // ─── Interactive Prompt ──────────────────────────────────────────
 
 async function prompt(question: string): Promise<string> {
-  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  const rl = createInterface({ input: process.stdin, output: process.stderr });
   return new Promise((resolve) => {
     rl.question(question, (answer) => {
       rl.close();
@@ -226,15 +226,15 @@ async function prompt(question: string): Promise<string> {
 async function interactiveCheckpoint(phase: string, summary: string): Promise<{ action: "continue" | "skip" | "add"; extra?: string }> {
   if (!INTERACTIVE) return { action: "continue" };
 
-  console.log(`\n${"─".repeat(60)}`);
-  console.log(`  CHECKPOINT: ${phase}`);
-  console.log(`${"─".repeat(60)}`);
-  console.log(summary);
-  console.log(`\nOptions:`);
-  console.log(`  [enter]  Continue to next phase`);
-  console.log(`  s        Skip remaining topics`);
-  console.log(`  a        Add a follow-up query (go deeper on something)`);
-  console.log(`${"─".repeat(60)}`);
+  process.stderr.write(`\n${"─".repeat(60)}\n`);
+  process.stderr.write(`  CHECKPOINT: ${phase}\n`);
+  process.stderr.write(`${"─".repeat(60)}\n`);
+  process.stderr.write(`${summary}\n`);
+  process.stderr.write(`\nOptions:\n`);
+  process.stderr.write(`  [enter]  Continue to next phase\n`);
+  process.stderr.write(`  s        Skip remaining topics\n`);
+  process.stderr.write(`  a        Add a follow-up query (go deeper on something)\n`);
+  process.stderr.write(`${"─".repeat(60)}\n`);
 
   const answer = await prompt("→ ");
 
@@ -581,7 +581,7 @@ const startTime = Date.now();
 
 function log(stage: string, msg: string) {
   const elapsed = ((Date.now() - startTime) / 1000).toFixed(0);
-  console.log(`  [${elapsed.padStart(4)}s] ${stage.padEnd(10)} ${msg}`);
+  process.stderr.write(`  [${elapsed.padStart(4)}s] ${stage.padEnd(10)} ${msg}\n`);
 }
 
 // ─── Parallel Runner with Concurrency Limit ─────────────────────
@@ -609,9 +609,9 @@ async function parallelMap<T, R>(
 // ─── Phase 1: Topic Discovery ───────────────────────────────────
 
 async function runDiscovery(config: ResearchConfig): Promise<string> {
-  console.log("\n=== Phase 1: Topic Discovery ===\n");
-  console.log(
-    `Running ${config.DISCOVERY_QUERIES.length} grounded searches (concurrency: ${SEARCH_BATCH_SIZE})...\n`,
+  process.stderr.write("\n=== Phase 1: Topic Discovery ===\n\n");
+  process.stderr.write(
+    `Running ${config.DISCOVERY_QUERIES.length} grounded searches (concurrency: ${SEARCH_BATCH_SIZE})...\n\n`,
   );
 
   // Run all discovery queries in parallel
@@ -636,8 +636,8 @@ async function runDiscovery(config: ResearchConfig): Promise<string> {
   // Optional: deep-scrape top discovery sources
   const scraped = await scrapeTopSources(uniqueSources, Math.min(SCRAPE_TOP_N, 3));
 
-  console.log(
-    `\nCollected ${allFindings.length} results, ${uniqueSources.length} unique sources${scraped.length > 0 ? `, ${scraped.length} deep-scraped` : ""}. Synthesizing...\n`,
+  process.stderr.write(
+    `\nCollected ${allFindings.length} results, ${uniqueSources.length} unique sources${scraped.length > 0 ? `, ${scraped.length} deep-scraped` : ""}. Synthesizing...\n\n`,
   );
 
   const scrapedContext =
@@ -942,22 +942,35 @@ async function main() {
   const config = await loadConfig();
   const timestamp = new Date().toISOString().slice(0, 10);
 
-  console.log(`\n${"=".repeat(60)}`);
-  console.log(`  Deep Research Pipeline — ${CONFIG_NAME}`);
-  console.log(`  ${timestamp} | Model: ${MODEL}`);
-  console.log(`  Search: Gemini + Google Search grounding`);
-  console.log(`  Scraping: ${HAS_FIRECRAWL ? `Firecrawl (top ${SCRAPE_TOP_N} URLs/topic)` : "Disabled (no FIRECRAWL_API_KEY)"}`);
-  console.log(`  Concurrency: ${CONCURRENCY} topics | ${SEARCH_BATCH_SIZE} queries${FAST_MODE ? " (fast mode)" : ""}`);
-  console.log(`  Interactive: ${INTERACTIVE ? "ON" : "OFF"} | Checkpoint: ${CHECKPOINT ? "ON" : "OFF"}`);
-  if (RESONANCE) console.log(`  Resonance: loaded (${RESONANCE.keywords.length} keywords, ${RESONANCE.references.length} refs)`);
-  console.log(`${"=".repeat(60)}\n`);
+  process.stderr.write(`\n${"=".repeat(60)}\n`);
+  process.stderr.write(`  Deep Research Pipeline — ${CONFIG_NAME}\n`);
+  process.stderr.write(`  ${timestamp} | Model: ${MODEL}\n`);
+  process.stderr.write(`  Search: Gemini + Google Search grounding\n`);
+  process.stderr.write(`  Scraping: ${HAS_FIRECRAWL ? `Firecrawl (top ${SCRAPE_TOP_N} URLs/topic)` : "Disabled (no FIRECRAWL_API_KEY)"}\n`);
+  process.stderr.write(`  Concurrency: ${CONCURRENCY} topics | ${SEARCH_BATCH_SIZE} queries${FAST_MODE ? " (fast mode)" : ""}\n`);
+  process.stderr.write(`  Interactive: ${INTERACTIVE ? "ON" : "OFF"} | Checkpoint: ${CHECKPOINT ? "ON" : "OFF"}\n`);
+  if (RESONANCE) process.stderr.write(`  Resonance: loaded (${RESONANCE.keywords.length} keywords, ${RESONANCE.references.length} refs)\n`);
+  process.stderr.write(`${"=".repeat(60)}\n\n`);
 
   // Phase 1: Discovery
   const discoveryPath = await runDiscovery(config);
-  console.log(`\nDiscovery saved: ${discoveryPath}`);
+  process.stderr.write(`\nDiscovery saved: ${discoveryPath}\n`);
 
   if (DISCOVER_ONLY) {
-    console.log("\n--discover-only flag set. Stopping after discovery.");
+    process.stderr.write("\n--discover-only flag set. Stopping after discovery.\n");
+    // Output discovery result to stdout for agent consumption
+    const payload = JSON.stringify({
+      config: CONFIG_NAME,
+      phase: "discovery",
+      topics_completed: 0,
+      topics_available: config.TOPICS.map(t => t.id),
+      output_dir: OUTPUT_DIR,
+      files: [discoveryPath],
+      duration_s: Math.round((Date.now() - startTime) / 1000),
+      model: MODEL,
+      has_firecrawl: HAS_FIRECRAWL,
+    }, null, 2) + "\n";
+    writeSync(1, payload);
     return;
   }
 
@@ -968,7 +981,20 @@ async function main() {
   );
 
   if (discoveryCheckpoint.action === "skip") {
-    console.log("\nStopping after discovery (user choice).");
+    process.stderr.write("\nStopping after discovery (user choice).\n");
+    const payload = JSON.stringify({
+      config: CONFIG_NAME,
+      phase: "discovery",
+      topics_completed: 0,
+      topics_available: config.TOPICS.map(t => t.id),
+      output_dir: OUTPUT_DIR,
+      files: [discoveryPath],
+      stopped_by: "user",
+      duration_s: Math.round((Date.now() - startTime) / 1000),
+      model: MODEL,
+      has_firecrawl: HAS_FIRECRAWL,
+    }, null, 2) + "\n";
+    writeSync(1, payload);
     return;
   }
 
@@ -992,8 +1018,8 @@ async function main() {
     process.exit(1);
   }
 
-  console.log(
-    `\n=== Phase 2: Deep Research — ${topicsToRun.length} topics (concurrency: ${CONCURRENCY}) ===\n`,
+  process.stderr.write(
+    `\n=== Phase 2: Deep Research — ${topicsToRun.length} topics (concurrency: ${CONCURRENCY}) ===\n\n`,
   );
 
   const topicResults = await parallelMap(
@@ -1017,7 +1043,7 @@ async function main() {
   );
 
   // Phase 3: Cross-topic synthesis
-  console.log(`\n=== Phase 3: Cross-Topic Synthesis ===\n`);
+  process.stderr.write(`\n=== Phase 3: Cross-Topic Synthesis ===\n\n`);
 
   const crossPrompt = `Synthesize ${topicResults.length} deep research reports into a unified knowledge base.
 
@@ -1071,15 +1097,42 @@ ${topicResults.map((r) => `- \`${r.filename}\` — ${r.topic.name}`).join("\n")}
     0,
   );
 
-  console.log(`\n${"=".repeat(60)}`);
-  console.log(`  COMPLETE — ${totalElapsed}s total`);
-  console.log(`  ${topicResults.length} topic reports + 1 cross-topic synthesis`);
-  console.log(`  ~${totalSources} source references`);
-  console.log(`  Output: ${OUTPUT_DIR}/`);
-  console.log(`${"=".repeat(60)}\n`);
+  process.stderr.write(`\n${"=".repeat(60)}\n`);
+  process.stderr.write(`  COMPLETE — ${totalElapsed}s total\n`);
+  process.stderr.write(`  ${topicResults.length} topic reports + 1 cross-topic synthesis\n`);
+  process.stderr.write(`  ~${totalSources} source references\n`);
+  process.stderr.write(`  Output: ${OUTPUT_DIR}/\n`);
+  process.stderr.write(`${"=".repeat(60)}\n\n`);
+
+  // Structured JSON summary to stdout — this is what agents read
+  const summaryPayload = JSON.stringify({
+    config: CONFIG_NAME,
+    phase: "complete",
+    topics_completed: topicResults.length,
+    topics_available: topicsToRun.map(t => t.id),
+    output_dir: OUTPUT_DIR,
+    files: [
+      ...topicResults.map(r => r.filename),
+      `${timestamp}_${CONFIG_NAME}_synthesis.md`,
+    ],
+    synthesis_file: summaryPath,
+    source_references: totalSources,
+    duration_s: parseInt(totalElapsed, 10),
+    model: MODEL,
+    has_firecrawl: HAS_FIRECRAWL,
+  }, null, 2) + "\n";
+  writeSync(1, summaryPayload);
 }
 
 main().catch((err) => {
-  console.error("Fatal error:", err);
+  const errMsg = err instanceof Error ? err.message : String(err);
+  process.stderr.write(`[forge] Fatal error: ${errMsg}\n`);
+
+  const payload = JSON.stringify({
+    error: errMsg,
+    config: CONFIG_NAME,
+    hint: "Check stderr for details. Common causes: missing API key, network timeout, invalid config.",
+  }, null, 2) + "\n";
+  writeSync(1, payload); // synchronous stdout write before exit
   process.exit(1);
 });
