@@ -1,0 +1,258 @@
+# K-Hole Script Manifest — Reference Implementation
+#
+# Declares every invocable script in this construct with full
+# argument schemas, output contracts, credential requirements,
+# and danger levels. Agents and runtimes use this to invoke
+# scripts correctly without reading source code.
+#
+# Schema version tracks the manifest format itself, not the construct.
+manifest_version: 1
+construct: k-hole
+
+scripts:
+  # ── dig-search ────────────────────────────────────────────────
+  # Interactive single-query depth search for pair-research (/dig).
+  # Returns in seconds — designed for conversational speed.
+  - name: dig-search
+    path: scripts/dig-search.ts
+    runtime: npx tsx
+    description: >
+      Lightweight Gemini grounded search for interactive pair-research.
+      Single-query depth search that synthesizes findings from web sources,
+      optional resonance profile, and optional trail context. Seven voices
+      (STAMETS) shape the synthesis — Lilly (tank), Carhart (dissolve),
+      Shulgin (scale/depth-rating), Warburg (atlas), Nelson (thread),
+      Ulbricht (bazaar), Nakamoto (clean stdout).
+    danger_level: safe
+    idempotent: false
+    side_effects:
+      - Appends dig entry to trail file in grimoires/k-hole/research-output/
+    args:
+      - name: query
+        flag: "--query"
+        type: string
+        required: true
+        description: The thread to pull — a topic, question, or concept to research
+      - name: depth
+        flag: "--depth"
+        type: int
+        required: false
+        default: 2
+        constraints:
+          min: 0
+          max: 4
+        description: >
+          Search depth level. 0 = tank mode (synthesize from trail + resonance only,
+          no web search). 1 = direct practitioner knowledge. 2 = cross-domain parallels.
+          3 = historical lineage. 4 = critiques and contrarian views.
+      - name: trail
+        flag: "--trail"
+        type: string
+        required: false
+        description: >
+          Path to a .md trail file inside research-output/. Loads last 4000 chars
+          as context for the synthesis (builds on previous digs, avoids repetition).
+          If omitted, a new trail file is created for today's date.
+      - name: resonance
+        flag: "--resonance"
+        type: string
+        required: false
+        description: >
+          Path to a resonance-profile.yaml. Anchors the synthesis to the user's
+          interests, aesthetic, and domain touchstones. Auto-discovered by walking
+          up from script directory if not specified.
+      - name: model
+        flag: "--model"
+        type: string
+        required: false
+        default: gemini-3-flash-preview
+        description: >
+          Override the primary Gemini model. Falls back through
+          gemini-2.5-flash → gemini-2.0-flash if the primary is unavailable.
+    credentials:
+      - name: GEMINI_API_KEY
+        required: true
+        alternatives:
+          - GOOGLE_API_KEY
+        description: Gemini API key for grounded search and synthesis
+        obtain: https://aistudio.google.com/apikey
+    output:
+      format: json
+      stream: stdout
+      schema:
+        query: string
+        depth_rating: string          # −, ±, +, ++, or +++
+        findings: string              # Extracted ### Findings section
+        emergence: string | null      # Extracted ### Emergence section (null if nothing emerged)
+        pull_threads: string[]        # Searchable sub-topics extracted from ### Pull Threads
+        synthesis: string             # Full raw synthesis text
+        sources:
+          type: array
+          items:
+            title: string
+            url: string
+        source_count: int
+        search_count: int
+        web_search_queries: string[]  # Actual queries Gemini executed via google_search tool
+        had_resonance: boolean
+        had_trail: boolean
+        trail_file: string            # Absolute path to the trail file written to
+    error_output:
+      format: json
+      stream: stdout
+      schema:
+        error: string
+        query: string
+    progress:
+      stream: stderr
+      format: "[dig] human-readable progress lines"
+
+  # ── deep-research ─────────────────────────────────────────────
+  # Multi-phase batch research pipeline (/forge).
+  # Long-running — minutes to tens of minutes depending on topic count.
+  - name: deep-research
+    path: scripts/deep-research.ts
+    runtime: npx tsx
+    description: >
+      Domain-agnostic expert knowledge extraction pipeline. Eight phases:
+      (1) DISCOVER — meta-research to identify sub-domains,
+      (2) SEARCH — Gemini + Google Search grounding per topic,
+      (3) SCRAPE — Firecrawl deep-extraction of top URLs (optional),
+      (4) SYNTHESIZE — first-pass synthesis against focus areas,
+      (5) GAP ANALYSIS — identify unanswered questions,
+      (6) FILL GAPS — second search round on gaps,
+      (7) FINAL MERGE — exhaustive synthesis with all findings,
+      (8) CROSS-TOPIC — pattern extraction across all domains.
+      Requires a research config file at scripts/research-config-{name}.ts.
+    danger_level: safe
+    idempotent: false
+    side_effects:
+      - Writes report files to grimoires/k-hole/research-output/
+      - Writes checkpoint files to grimoires/k-hole/research-output/.checkpoints/ (if --checkpoint)
+    args:
+      - name: config
+        flag: "--config"
+        type: string
+        required: true
+        constraints:
+          pattern: "^[a-zA-Z0-9_-]+$"
+        description: >
+          Research config name. Loads scripts/research-config-{name}.ts which defines
+          discovery queries, topics, search queries, focus areas, and synthesis context.
+          Use /config skill or copy scripts/templates/research-config.template.ts to create one.
+      - name: topic
+        flag: "--topic"
+        type: string
+        required: false
+        description: >
+          Run a single topic by its ID instead of all topics in the config.
+          Must match a topic.id in the research config.
+      - name: discover-only
+        flag: "--discover-only"
+        type: boolean
+        required: false
+        default: false
+        description: >
+          Stop after Phase 1 (topic discovery). Useful for mapping the landscape
+          before committing to full deep research.
+      - name: fast
+        flag: "--fast"
+        type: boolean
+        required: false
+        default: false
+        description: >
+          Fast mode — increases default concurrency to 6 and search batch to 8.
+          Trades API rate-limit headroom for speed.
+      - name: interactive
+        flag: "--interactive"
+        type: boolean
+        required: false
+        default: false
+        description: >
+          Interactive mode — pauses at checkpoints for user input (continue, skip,
+          or add follow-up queries). Requires a TTY. Forces concurrency to 1
+          to avoid stdin contention.
+      - name: checkpoint
+        flag: "--checkpoint"
+        type: boolean
+        required: false
+        default: false
+        description: >
+          Enable checkpoint save/resume. Saves completed topic results to
+          .checkpoints/{config}/ so interrupted runs can resume without re-processing.
+      - name: clear-checkpoints
+        flag: "--clear-checkpoints"
+        type: boolean
+        required: false
+        default: false
+        description: Delete all checkpoints for this config name before running.
+      - name: concurrency
+        flag: "--concurrency"
+        type: int
+        required: false
+        default: 3
+        description: >
+          Number of topics to research in parallel. Default 3, fast mode default 6.
+          Interactive mode forces 1.
+      - name: search-batch
+        flag: "--search-batch"
+        type: int
+        required: false
+        default: 6
+        description: >
+          Number of search queries to run in parallel per topic. Default 6,
+          fast mode default 8.
+      - name: scrape-top
+        flag: "--scrape-top"
+        type: int
+        required: false
+        default: 5
+        description: >
+          Number of top URLs to deep-scrape per topic via Firecrawl.
+          Set to 0 to disable scraping even when FIRECRAWL_API_KEY is present.
+      - name: model
+        flag: "--model"
+        type: string
+        required: false
+        default: gemini-3.1-pro-preview
+        description: >
+          Override the primary Gemini model. Falls back through
+          gemini-2.5-pro → gemini-2.0-flash if the primary is unavailable.
+    credentials:
+      - name: GEMINI_API_KEY
+        required: true
+        alternatives:
+          - GOOGLE_API_KEY
+        description: Gemini API key for grounded search and synthesis
+        obtain: https://aistudio.google.com/apikey
+      - name: FIRECRAWL_API_KEY
+        required: false
+        description: >
+          Firecrawl API key for deep URL scraping (Phase 3). Pipeline works
+          without it but Firecrawl adds depth by extracting full page content.
+        obtain: https://firecrawl.dev
+    output:
+      format: json
+      stream: stdout
+      schema:
+        config: string
+        phase: string                 # "discovery" | "complete" | "error"
+        topics_completed: int
+        topics_available: string[]
+        output_dir: string
+        files: string[]               # Filenames of generated report files
+        synthesis_file: string        # Absolute path to cross-topic synthesis (only in "complete" phase)
+        source_references: int        # Approximate count of source references across all reports
+        duration_s: int
+        model: string                 # Actual model used (may differ from requested if fallback occurred)
+        has_firecrawl: boolean
+    error_output:
+      format: json
+      stream: stdout
+      schema:
+        error: string
+        config: string
+        hint: string
+    progress:
+      stream: stderr
+      format: "[elapsed] STAGE message — timed progress with phase headers"
