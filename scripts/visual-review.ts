@@ -98,9 +98,9 @@ const MODE = (getArg("mode") || "review") as
   | "audit"
   | "palette";
 const MODEL =
-  getArg("model") || process.env.VISUAL_REVIEW_MODEL || "gemini-2.5-flash";
+  getArg("model") || process.env.VISUAL_REVIEW_MODEL || "gemini-3.1-pro-preview";
 
-const FALLBACK_MODELS = ["gemini-2.0-flash"];
+const FALLBACK_MODELS = ["gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.0-flash"];
 
 let activeModel = MODEL;
 
