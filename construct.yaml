@@ -22,6 +22,9 @@ skills:
     path: skills/config-generator
   - slug: deep-research
     path: skills/deep-research
+  # Visual analysis (multimodal)
+  - slug: visual-review
+    path: skills/visual-review
 
 commands:
   - name: dig

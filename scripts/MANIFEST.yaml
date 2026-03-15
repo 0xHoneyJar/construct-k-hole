@@ -256,3 +256,91 @@ scripts:
     progress:
       stream: stderr
       format: "[elapsed] STAGE message — timed progress with phase headers"
+
+  # ── visual-review ──────────────────────────────────────────────
+  # Multimodal image analysis for creative pair-research.
+  # Gives K-Hole eyes — analyze renders, compare against references.
+  - name: visual-review
+    path: scripts/visual-review.ts
+    runtime: npx tsx
+    description: >
+      Gemini multimodal image analysis for creative depth work.
+      Reviews renders for composition, palette, contrast, and atmosphere.
+      Compares against reference images to identify gaps. Extracts color
+      palettes. Performs production-readiness audits. Gives K-Hole the
+      ability to see and evaluate visual work during dig sessions.
+    danger_level: safe
+    idempotent: true
+    side_effects: []
+    args:
+      - name: image
+        flag: "--image"
+        type: string
+        required: true
+        description: Path to the image to analyze
+      - name: reference
+        flag: "--reference"
+        type: string
+        required: false
+        description: >
+          Path to a reference image for comparison. When provided with
+          mode=review, automatically switches to compare mode.
+      - name: focus
+        flag: "--focus"
+        type: string
+        required: false
+        description: >
+          Specific aspect to focus analysis on (e.g. "palette warmth",
+          "composition balance", "cel-shading band quality"). Narrows
+          the analysis to what matters most right now.
+      - name: mode
+        flag: "--mode"
+        type: string
+        required: false
+        default: review
+        constraints:
+          enum: [review, compare, audit, palette]
+        description: >
+          Analysis mode. review = general quality assessment with scored
+          dimensions. compare = side-by-side against reference (requires
+          --reference). audit = detailed technical production-readiness
+          check. palette = extract and analyze color palette.
+      - name: model
+        flag: "--model"
+        type: string
+        required: false
+        default: gemini-2.5-flash
+        description: >
+          Override the Gemini model. Falls back through
+          gemini-2.0-flash if the primary is unavailable.
+    credentials:
+      - name: GEMINI_API_KEY
+        required: true
+        alternatives:
+          - GOOGLE_API_KEY
+        description: Gemini API key for multimodal vision analysis
+        obtain: https://aistudio.google.com/apikey
+    output:
+      format: json
+      stream: stdout
+      schema:
+        mode: string
+        model: string
+        image: string
+        reference: string | null
+        focus: string | null
+        duration_s: float
+        analysis: string
+        scores: object               # Rated dimensions 0-10 (mode-dependent)
+        recommendations: string[]    # Prioritized action items
+        strengths: string[]          # What's working well (review mode)
+        gaps: string[]               # Where render falls short (compare mode)
+        dominant_colors: object[]    # Extracted palette (palette mode)
+    error_output:
+      format: json
+      stream: stdout
+      schema:
+        error: string
+    progress:
+      stream: stderr
+      format: "[tag] message"

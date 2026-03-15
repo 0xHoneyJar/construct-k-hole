@@ -1,0 +1,30 @@
+name: Visual Review
+slug: visual-review
+description: >
+  Gemini multimodal image analysis for creative depth work. Reviews renders
+  for composition, palette, contrast, and atmosphere. Compares against
+  reference images. Extracts color palettes. Gives K-Hole eyes for visual
+  pair-research — the ability to see, compare, and critique during dig sessions.
+triggers:
+  - visual review
+  - compare these images
+  - analyze this render
+  - review this design
+  - check the palette
+  - how does this compare to
+  - what's wrong with this image
+capabilities:
+  model_tier: sonnet
+  danger_level: safe
+  effort_hint: small
+  downgrade_allowed: true
+  execution_hint: parallel
+  requires:
+    native_runtime: true
+    tool_calling: true
+    thinking_traces: false
+    vision: true
+scripts:
+  - name: visual-review
+    path: scripts/visual-review.ts
+    runtime: npx tsx
