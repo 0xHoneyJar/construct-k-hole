@@ -66,6 +66,16 @@ events:
         topic: string
         anchor: string
         excerpt: string
+capabilities:
+  model_tier: opus
+  danger_level: moderate
+  effort_hint: large
+  downgrade_allowed: false
+  execution_hint: sequential
+  requires:
+    tool_calling: true
+    thinking_traces: true
+    vision: false
 type: skill-pack
 composition_paths:
   writes:
