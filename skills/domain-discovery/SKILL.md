@@ -86,7 +86,7 @@ Show the ranked topic list and ask:
 - Any topics to add that the meta-research missed
 - Any adjustments to focus areas
 
-Save the discovery output to `scripts/research-output/<date>_<domain>_topic-discovery.md`.
+Save the discovery output to `grimoires/k-hole/research-output/<date>_<domain>_topic-discovery.md` (pack) or `scripts/research-output/` (standalone).
 
 ## Quality Criteria for Discovery Queries
 

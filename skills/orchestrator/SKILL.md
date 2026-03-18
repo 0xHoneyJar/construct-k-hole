@@ -80,7 +80,7 @@ The orchestrator runs four phases in sequence:
    - Second round of grounded search on gap queries
    - Final exhaustive synthesis merging all findings
 3. Cross-topic synthesis identifying patterns across all domains
-4. All outputs saved to `scripts/research-output/`
+4. All outputs saved to `grimoires/k-hole/research-output/` (pack) or `scripts/research-output/` (standalone)
 
 **Output:** Individual topic research documents + cross-topic synthesis
 
@@ -100,12 +100,24 @@ The orchestrator runs four phases in sequence:
 
 **Output:** Final organized research collection ready for use
 
+## Dispatching Research Subagents
+
+When dispatching subagents for parallel topic research (via Agent tool), **include script instructions in the subagent prompt**. Subagents do not inherit /forge context.
+
+Include this in each research subagent prompt:
+```
+You MUST use the deep-research script. Do NOT use WebSearch or WebFetch.
+Run: npx tsx .claude/constructs/packs/k-hole/scripts/deep-research.ts --config <slug> --topic <topic-id>
+Credentials resolve automatically from ~/.loa/credentials.json.
+Parse JSON from stdout. Progress goes to stderr.
+```
+
 ## Environment Requirements
 
-Before running, verify:
-1. `GEMINI_API_KEY` or `GOOGLE_API_KEY` is set in `.env`
-2. `FIRECRAWL_API_KEY` is set in `.env` (optional, enables deep URL scraping)
-3. Node.js and `tsx` are available (`npx tsx` must work)
+Credentials are resolved via cascade: shell env → project `.env` → `~/.loa/credentials.json`.
+1. `GEMINI_API_KEY` or `GOOGLE_API_KEY` (required — check with `loa-credentials.sh status`)
+2. `FIRECRAWL_API_KEY` (optional, enables deep URL scraping)
+3. Node.js and `tsx` available (`npx tsx` must work)
 4. The `scripts/` directory exists with `deep-research.ts`
 
 ## Error Handling

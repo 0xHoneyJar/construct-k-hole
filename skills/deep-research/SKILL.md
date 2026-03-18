@@ -73,10 +73,10 @@ Output: research-output/<date>_<config>_*.md
 
 ### Prerequisites
 
-1. Verify API keys:
+1. Verify API keys (resolved via credential cascade: shell env → project `.env` → `~/.loa/credentials.json`):
 ```bash
-# Check .env file
-grep -E "GEMINI_API_KEY|GOOGLE_API_KEY|FIRECRAWL_API_KEY" .env
+# Check credential store
+bash scripts/loa-credentials.sh status 2>/dev/null || echo "Check .env or ~/.loa/credentials.json for GEMINI_API_KEY"
 ```
 
 2. Verify config exists:
@@ -127,7 +127,7 @@ The script outputs live progress:
 
 ## Output Files
 
-All outputs go to `scripts/research-output/`:
+All outputs go to `grimoires/k-hole/research-output/` (when installed as a pack) or `scripts/research-output/` (standalone):
 
 | File Pattern | Content |
 |---|---|
