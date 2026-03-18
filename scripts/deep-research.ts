@@ -35,6 +35,17 @@ import { createInterface } from "readline";
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 
+// Walk up from startDir to find a project root (.git or .claude/).
+function findProjectRoot(startDir: string): string | null {
+  let dir = startDir;
+  while (true) {
+    if (existsSync(join(dir, ".git")) || existsSync(join(dir, ".claude"))) return dir;
+    const parent = dirname(dir);
+    if (parent === dir) return null;
+    dir = parent;
+  }
+}
+
 // Output dir: prefer project-level grimoires/k-hole/ when installed as a pack
 function resolveOutputDir(): string {
   const packMarker = ".claude/constructs/packs/";
@@ -45,15 +56,22 @@ function resolveOutputDir(): string {
     mkdirSync(projectOutput, { recursive: true });
     return projectOutput;
   }
+  // Symlink case: SCRIPT_DIR resolves to global store (~/.loa/) via symlink.
+  const projectRoot = findProjectRoot(process.cwd());
+  if (projectRoot && existsSync(join(projectRoot, ".claude", "constructs", "packs", "k-hole"))) {
+    const projectOutput = join(projectRoot, "grimoires", "k-hole", "research-output");
+    mkdirSync(projectOutput, { recursive: true });
+    return projectOutput;
+  }
   return join(SCRIPT_DIR, "research-output");
 }
 const OUTPUT_DIR = resolveOutputDir();
 
-// Load .env — walk up from script directory to filesystem root.
-// Handles both standalone repos (.env one level up) and installed packs
-// (.env at project root, many levels above .claude/constructs/packs/k-hole/scripts/).
-function loadEnv() {
-  let dir = SCRIPT_DIR;
+// Load .env — find project root from cwd, then fall back to SCRIPT_DIR walk-up.
+// When running as a symlinked pack from the global store (~/.loa/), import.meta.url
+// resolves to the real path — walk-up from there never reaches the project root.
+function loadEnvFrom(startDir: string): boolean {
+  let dir = startDir;
   while (true) {
     const envPath = join(dir, ".env");
     if (existsSync(envPath)) {
@@ -63,14 +81,15 @@ function loadEnv() {
           process.env[match[1]] = match[2].trim().replace(/^["']|["']$/g, "");
         }
       }
-      return;
+      return true;
     }
-    const parent = join(dir, "..");
-    if (parent === dir) return; // hit filesystem root
+    const parent = dirname(dir);
+    if (parent === dir) return false;
     dir = parent;
   }
 }
-loadEnv();
+const PROJECT_ROOT = findProjectRoot(process.cwd());
+(PROJECT_ROOT && loadEnvFrom(PROJECT_ROOT)) || loadEnvFrom(SCRIPT_DIR);
 
 // Strip wrapping quotes — handles both .env parser output and shell-injected values
 const GEMINI_KEY = (process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || "")

@@ -14,18 +14,31 @@
 import { readFileSync, existsSync, mkdirSync, writeSync } from "fs";
 import { join, dirname } from "path";
 
+// ─── Project Root Detection ──────────────────────────────────────
+
+/**
+ * Walk up from startDir to find a project root.
+ * A project root is a directory containing .git or .claude/.
+ * Returns null if no project root is found (hit filesystem root).
+ */
+function findProjectRoot(startDir: string): string | null {
+  let dir = startDir;
+  while (true) {
+    if (existsSync(join(dir, ".git")) || existsSync(join(dir, ".claude"))) {
+      return dir;
+    }
+    const parent = dirname(dir);
+    if (parent === dir) return null;
+    dir = parent;
+  }
+}
+
 // ─── Credential Cascade ──────────────────────────────────────────
 
 /**
- * Load environment variables from the nearest .env file.
- * Walks up from startDir to filesystem root, loading the first .env found.
- * Does NOT overwrite already-set env vars.
- *
- * Handles both standalone repos (.env one level up from scripts/)
- * and installed packs (.env at project root, many levels above
- * .claude/constructs/packs/{slug}/scripts/).
+ * Walk up from startDir looking for .env. Returns true if found and loaded.
  */
-export function loadEnvFile(startDir: string): void {
+function loadEnvFrom(startDir: string): boolean {
   let dir = startDir;
   while (true) {
     const envPath = join(dir, ".env");
@@ -36,12 +49,30 @@ export function loadEnvFile(startDir: string): void {
           process.env[match[1]] = match[2].trim().replace(/^["']|["']$/g, "");
         }
       }
-      return;
+      return true;
     }
     const parent = dirname(dir);
-    if (parent === dir) return; // filesystem root
+    if (parent === dir) return false;
     dir = parent;
   }
+}
+
+/**
+ * Load environment variables from the nearest .env file.
+ * Does NOT overwrite already-set env vars.
+ *
+ * Strategy: find the project root from process.cwd() first, then fall back
+ * to walking up from startDir. This handles the global store symlink case
+ * where startDir (from import.meta.url) resolves to ~/.loa/ — walk-up
+ * from there never reaches the project root where .env lives.
+ */
+export function loadEnvFile(startDir: string): void {
+  // Try project root from cwd first (handles symlink + subdirectory cases)
+  const projectRoot = findProjectRoot(process.cwd());
+  if (projectRoot && loadEnvFrom(projectRoot)) return;
+
+  // Fallback: walk up from startDir (standalone repo case)
+  loadEnvFrom(startDir);
 }
 
 /**
@@ -127,10 +158,19 @@ export function resolveOutputDir(scriptDir: string, slug: string): string {
     throw new Error(`Invalid construct slug: ${slug}`);
   }
 
+  // Direct path detection (non-symlinked packs)
   const packMarker = ".claude/constructs/packs/";
   const idx = scriptDir.indexOf(packMarker);
   if (idx !== -1) {
     const projectRoot = scriptDir.slice(0, idx);
+    const output = join(projectRoot, "grimoires", slug, "research-output");
+    mkdirSync(output, { recursive: true });
+    return output;
+  }
+  // Symlink case: scriptDir resolves to global store (~/.loa/) via symlink.
+  // Walk up from cwd to find project root (handles subdirectory invocation).
+  const projectRoot = findProjectRoot(process.cwd());
+  if (projectRoot && existsSync(join(projectRoot, ".claude", "constructs", "packs", slug))) {
     const output = join(projectRoot, "grimoires", slug, "research-output");
     mkdirSync(output, { recursive: true });
     return output;
