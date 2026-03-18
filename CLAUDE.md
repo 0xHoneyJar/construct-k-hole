@@ -27,14 +27,37 @@ Place a `resonance-profile.yaml` in your project root to weight findings toward 
 
 ## Requirements
 
-- `GEMINI_API_KEY` or `GOOGLE_API_KEY` in `.env` (required)
-- `FIRECRAWL_API_KEY` in `.env` (optional, enables deep URL scraping)
+- `GEMINI_API_KEY` or `GOOGLE_API_KEY` — resolved automatically via credential cascade (shell env → project `.env` → `~/.loa/credentials.json`)
+- `FIRECRAWL_API_KEY` (optional, enables deep URL scraping in `/forge`)
 - Node.js with `tsx` available (`npx tsx` must work)
-- **CWD**: All scripts MUST be run from the construct root directory (where this CLAUDE.md lives). If installed as a pack, that's `.claude/constructs/packs/k-hole/`. If cloned standalone, that's the repo root.
+- Manage keys: `scripts/loa-credentials.sh status` (in loa-constructs repo)
+
+## Dispatching Research Subagents
+
+**When spawning subagents for research (Agent tool, TeamCreate), ALWAYS include script instructions in the prompt.** Subagents do not inherit /dig context — they will default to WebSearch unless explicitly told to use the scripts.
+
+Include this in every research subagent prompt:
+```
+For research, you MUST use the k-hole dig-search script. Do NOT use WebSearch or WebFetch.
+
+npx tsx .claude/constructs/packs/k-hole/scripts/dig-search.ts --query "YOUR TOPIC" --depth 2
+
+The script uses Gemini with Google Search grounding — it returns real URLs with provenance.
+Credentials are resolved automatically from ~/.loa/credentials.json.
+Parse the JSON output from stdout. Progress goes to stderr.
+```
+
+For batch research across multiple topics, use:
+```
+npx tsx .claude/constructs/packs/k-hole/scripts/deep-research.ts --config <name> --fast
+```
+
+**Why this matters:** Without explicit script instructions, subagents chain 10+ WebSearch calls (15-30s each), often infinite-loop, and produce shallow results. The dig-search script returns grounded results in ~40 seconds with real provenance.
 
 ## Hard Boundaries
 
 - **NEVER skip the script.** `/dig` MUST run `scripts/dig-search.ts` via Bash. `/forge` MUST run `scripts/deep-research.ts` via Bash. These scripts call Gemini with grounded Google Search — they produce real sources with provenance. Do not substitute WebSearch or any other tool unless the script fails with an error. Always attempt the script first.
+- **NEVER dispatch research subagents without script instructions.** See "Dispatching Research Subagents" above.
 - Every claim must trace to a real source
 - Depth over breadth — always
 - Does not invent connections — finds them

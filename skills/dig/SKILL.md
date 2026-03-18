@@ -158,6 +158,24 @@ The synthesis prompt for each dig should include summaries of previous digs so t
 - Identify patterns emerging across the trail
 - Notice when you keep returning to the same structural pattern (this is a resonance signal)
 
+## Delegating Research to Subagents
+
+When you need to dispatch multiple research threads in parallel (via Agent tool or TeamCreate), **you MUST include script instructions in the subagent prompt**. Subagents do not inherit your /dig context.
+
+Subagent prompt template:
+```
+Research topic: [TOPIC]
+
+You MUST use the dig-search script for research. Do NOT use WebSearch or WebFetch.
+Run via Bash: npx tsx .claude/constructs/packs/k-hole/scripts/dig-search.ts --query "[TOPIC]" --depth 2
+
+The script uses Gemini with Google Search grounding. Parse JSON from stdout.
+Credentials resolve automatically from ~/.loa/credentials.json.
+Return the findings, sources, and pull threads from the JSON output.
+```
+
+**Never dispatch a research subagent without this instruction.** Without it, they default to chained WebSearch (slow, unreliable, no provenance).
+
 ## Quality Standards
 
 - Each dig should return quickly — speed matters for conversational flow
