@@ -1,0 +1,30 @@
+name: Visual Dig
+slug: visual-dig
+description: >
+  Three-stage creative director pipeline: Gemini multimodal vision analyzes a
+  render, grounded web search finds relevant shader techniques, then synthesis
+  produces 3-5 actionable GLSL code modifications. Goes from "what's wrong" to
+  "here's working code" in one invocation.
+triggers:
+  - visual dig
+  - dig into this render
+  - how do I improve this shader
+  - make this look like
+  - shader recommendations for
+  - creative director feedback
+  - code to fix this render
+capabilities:
+  model_tier: sonnet
+  danger_level: safe
+  effort_hint: medium
+  downgrade_allowed: true
+  execution_hint: sequential
+  requires:
+    native_runtime: true
+    tool_calling: true
+    thinking_traces: false
+    vision: true
+scripts:
+  - name: visual-dig
+    path: scripts/visual-dig.ts
+    runtime: npx tsx
