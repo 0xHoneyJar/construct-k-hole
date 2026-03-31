@@ -2,8 +2,8 @@ schema_version: 3
 name: K-Hole
 slug: k-hole
 version: 1.2.1
-description: Goes where search engines won't. Seven voices in productive tension pull threads through grounded search, synthesizing depth from domains others skim. Depth over breadth, always.
-short_description: "Depth engine for exploration"
+description: "Deep research engine with grounded web search and citation trails. Two modes: /dig for interactive pair-research (follow what resonates) and /forge for systematic multi-domain coverage. Produces structured findings, not summaries."
+short_description: "Grounded deep research + synthesis"
 domain:
   - analytics
 author: 0xHoneyJar
