@@ -2,8 +2,8 @@ schema_version: 3
 name: K-Hole
 slug: k-hole
 version: 1.2.1
-description: "Deep research engine with grounded web search and citation trails. Two modes: /dig for interactive pair-research (follow what resonates) and /forge for systematic multi-domain coverage. Produces structured findings, not summaries."
-short_description: "Grounded deep research + synthesis"
+description: "Deep research engine with web search and source tracking. Two modes: /dig for interactive exploration (go deep on one topic) and /forge for systematic coverage across multiple domains. Produces structured research with citations, not summaries."
+short_description: "Deep research + source synthesis"
 domain:
   - analytics
 author: 0xHoneyJar
