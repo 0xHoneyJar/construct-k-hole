@@ -115,13 +115,25 @@ This context is injected into every synthesis prompt to keep outputs focused and
 
 ### Step 5: Validate and Save
 
-1. Ensure the TypeScript file is valid (exports match the expected interfaces)
-2. Save to `scripts/research-config-<domain>.ts`
-3. Show the user a summary:
+1. Save to `scripts/research-config-<domain>.ts`
+2. **Run validation (MANDATORY):**
+   ```bash
+   npx tsc --noEmit scripts/research-config-<domain>.ts
+   ```
+   If this fails, fix the TypeScript errors before presenting to the user. Common issues: missing commas in arrays, unescaped quotes in query strings, mismatched interface types.
+3. **Verify exports:** The file must export `DISCOVERY_QUERIES`, `TOPICS`, and `SYNTHESIS_CONTEXT` matching the interfaces defined in Step 2.
+4. **Path check:** Confirm the file path resolves correctly: `ls -la scripts/research-config-<domain>.ts`
+5. Show the user a summary:
    - Number of discovery queries
    - Number of topics
    - Total search queries across all topics
    - Estimated API calls (discovery + deep research)
+
+### Negative Constraints
+
+- **NEVER generate a config with generic search queries.** "Best practices for X" is not a research query. Every query must name specific people, tools, codebases, or techniques.
+- **Do NOT generate configs without discovery input.** If there's no discovery document, ask the user to run `/discover` first or provide the topic list manually. Do not invent topics from training data.
+- **Do NOT skip the tsc validation.** A config that doesn't parse will crash the pipeline mid-run, wasting API calls on already-completed topics.
 
 ### Topic ID Convention
 

@@ -25,6 +25,15 @@ Meta-research skill that takes a broad domain and identifies the specific sub-do
 
 ## Workflow
 
+### Step 0: Verify Environment
+
+Before running any discovery:
+1. `grep -E "GEMINI_API_KEY|GOOGLE_API_KEY" .env` — at least one must be set
+2. `npx tsx --version` — must return successfully
+3. `ls scripts/deep-research.ts` — the pipeline script must exist
+
+Do NOT proceed if prerequisites fail. Report what's missing and stop.
+
 ### Step 1: Understand the User's Goal
 
 Ask the user:
@@ -86,7 +95,15 @@ Show the ranked topic list and ask:
 - Any topics to add that the meta-research missed
 - Any adjustments to focus areas
 
-Save the discovery output to `grimoires/k-hole/research-output/<date>_<domain>_topic-discovery.md` (pack) or `scripts/research-output/` (standalone).
+Save the discovery output to `scripts/research-output/<date>_<domain>_topic-discovery.md`.
+
+## Negative Constraints
+
+- **NEVER fabricate discovery results.** If the grounded search found 4 sub-domains, report 4. Don't pad to 8 from your training data.
+- **NEVER substitute your own web search for the discovery script** unless it exits with an error. Grounded search provenance cannot be replicated.
+- **NEVER skip the user checkpoint.** Discovery outputs must be reviewed and approved before becoming config inputs. The user steering the topic selection is the entire point of this phase.
+- **Do NOT present generic topic lists.** "Performance optimization" is not a discovery finding. "How Stripe's particle system avoids GPU stalls on M1 by batching draw calls into 4-instance groups" is a discovery finding.
+- **Do NOT confuse discovery with deep research.** Discovery maps the territory at reconnaissance depth. It identifies WHAT to research deeply, not the deep findings themselves.
 
 ## Quality Criteria for Discovery Queries
 

@@ -27,6 +27,18 @@ Executes the full multi-phase research pipeline using a config file. This is the
 /research --config animation --checkpoint       # Save/resume state per topic
 ```
 
+## Prerequisites (Verify BEFORE Running)
+
+Before executing any research pipeline, verify these. Do NOT proceed if any are missing.
+
+1. **API keys:** `grep -E "GEMINI_API_KEY|GOOGLE_API_KEY" .env` — at least one must be set
+2. **Optional:** `grep "FIRECRAWL_API_KEY" .env` — enables deep URL scraping (not required)
+3. **Runtime:** `npx tsx --version` — must return successfully
+4. **Config:** If running with `--config <domain>`, verify `scripts/research-config-<domain>.ts` exists and parses: `npx tsc --noEmit scripts/research-config-<domain>.ts`
+5. **Output dir:** `scripts/research-output/` must exist (create if missing)
+
+If prerequisites fail, report what's missing and stop. Do not attempt to run the pipeline with missing keys — it will fail silently or produce empty results.
+
 ## Pipeline Architecture
 
 The research script (`scripts/deep-research.ts`) runs this pipeline for each topic:
@@ -71,24 +83,9 @@ Output: research-output/<date>_<config>_*.md
 
 **CRITICAL: You MUST run this script via Bash tool. Do NOT skip it. Do NOT substitute your own web search. The script calls Gemini with grounded Google Search — this produces real sources with provenance that you cannot replicate with other tools.**
 
-### Prerequisites
+### Pre-flight
 
-1. Verify API keys (resolved via credential cascade: shell env → project `.env` → `~/.loa/credentials.json`):
-```bash
-# Check credential store
-bash scripts/loa-credentials.sh status 2>/dev/null || echo "Check .env or ~/.loa/credentials.json for GEMINI_API_KEY"
-```
-
-2. Verify config exists:
-```bash
-ls scripts/research-config-<domain>.ts
-```
-
-3. Ensure dependencies:
-```bash
-# tsx must be available
-npx tsx --version
-```
+Run the prerequisite checks from the "Prerequisites" section above before proceeding.
 
 ### Execution
 
@@ -127,7 +124,7 @@ The script outputs live progress:
 
 ## Output Files
 
-All outputs go to `grimoires/k-hole/research-output/` (when installed as a pack) or `scripts/research-output/` (standalone):
+All outputs go to `scripts/research-output/`:
 
 | File Pattern | Content |
 |---|---|
@@ -144,6 +141,28 @@ After the pipeline completes:
 3. **Check source counts** — each topic should have 15-40 unique sources
 4. **Identify thin areas** — if any topic has fewer than 10 sources, consider re-running with refined queries
 5. **Look for contradictions** — different sources may disagree, note these for the user
+
+## Verification Phase (MANDATORY)
+
+After the pipeline completes and before presenting results to the user:
+
+### Source Verification
+1. **Count check:** Each topic document lists sources. Count them. If any topic has fewer than 10 unique sources, flag it as thin.
+2. **Attribution audit:** Scan your synthesis for claims. Each claim should trace to a source in that topic's document. If you find claims you can't trace, mark them `[ungrounded]` or remove them.
+3. **No cross-contamination:** Each topic's synthesis must only cite sources found during THAT topic's research phase. Do not bleed sources between topics.
+
+### Focus Area Coverage
+For each topic, score its focus areas:
+- **Covered:** The synthesis directly answers this question with sourced evidence
+- **Partial:** Touched on but not fully answered — note what's missing
+- **Gap:** Not addressed — candidate for re-run with refined queries
+
+Present coverage scores to the user. If more than 30% of focus areas are gaps, recommend re-running that topic with refined queries.
+
+### Output Integrity
+1. All file paths in output documents must resolve correctly
+2. Source URLs should be plausible (not hallucinated domains)
+3. The cross-topic synthesis should reference findings that actually appear in the individual topic documents
 
 ## Research Quality Standards
 
@@ -164,3 +183,66 @@ The pipeline is designed for depth, not speed. Quality indicators:
 | Thin synthesis | Add more specific search queries to the config |
 | Missing sources | Check if topic's search queries are too generic |
 | Script crash | Check `scripts/deep-research.ts` for syntax errors, run `npx tsc --noEmit` |
+
+## Negative Constraints
+
+Hard rules. Do not bend these.
+
+- **NEVER fabricate sources.** If the script found 23 sources for a topic, your synthesis cites at most 23 sources for that topic. Inventing URLs, author names, or paper titles is a critical failure.
+- **NEVER substitute your own web search for the research script** unless the script exits with an error. The script uses Gemini + Google Search grounding. You cannot replicate its source provenance with other tools.
+- **NEVER present discovery results as deep research.** Discovery is landscape mapping (Phase 1). Deep research is depth (Phase 2). They are not interchangeable.
+- **Do NOT silently skip the script and synthesize from training data.** If you find yourself writing a research synthesis without having run `npx tsx scripts/deep-research.ts`, stop. Go back. Run the script.
+- **Do NOT merge findings across topics** unless you are in the cross-topic synthesis phase. Each topic document must stand alone with only its own sources.
+- **Do NOT inflate source counts.** If the script reports "7 results, 42 sources" for a topic but many are duplicates, report the deduplicated count.
+- **Do NOT assume standard test/build commands** for the research scripts. Check that `npx tsx` works. Check that configs parse. Verify before executing.
+
+## Examples
+
+<example>
+user: /research --config animation
+
+agent:
+First, verify prerequisites:
+[tool_call: bash for `grep -E "GEMINI_API_KEY|GOOGLE_API_KEY" .env`]
+[tool_call: bash for `npx tsx --version`]
+[tool_call: bash for `ls scripts/research-config-animation.ts`]
+
+All checks pass. Running full pipeline:
+[tool_call: bash for `npx tsx scripts/deep-research.ts --config animation`]
+
+(Script runs, outputting progress lines to stderr. Agent monitors.)
+
+Pipeline complete. 6 topics researched.
+
+### Results Summary
+| Topic | Sources | Focus Areas | Coverage |
+|-------|---------|-------------|----------|
+| particle-morphing | 34 | 5/5 covered | Full |
+| spring-physics-gpu | 28 | 4/5 covered | 1 partial |
+| gpgpu-velocity-fields | 19 | 3/6 covered | 3 gaps |
+| ... | ... | ... | ... |
+
+Topic "gpgpu-velocity-fields" is thin — 3 of 6 focus areas are gaps. Recommend re-running with refined queries targeting FBO ping-pong and velocity texture encoding specifically.
+
+Cross-topic synthesis saved to scripts/research-output/2026-04-05_animation_synthesis.md.
+</example>
+
+<example>
+user: /research --config animation --topic spring-physics-gpu
+
+agent:
+[tool_call: bash for `npx tsx scripts/deep-research.ts --config animation --topic spring-physics-gpu`]
+
+Script exits with error: rate limit (429).
+
+The Gemini API hit rate limits on topic "spring-physics-gpu". The script retries automatically with exponential backoff, but all retries exhausted.
+
+Options:
+1. Wait 60 seconds and re-run: the rate limit window usually resets
+2. Reduce concurrency: `--concurrency 1 --search-batch 2`
+3. Switch to a different model: `--model gemini-2.5-flash`
+</example>
+
+## Final Reminder
+
+This pipeline produces reference-quality documents. Every source must be real. Every synthesis must answer its focus areas. Run the script — do not substitute. Verify prerequisites before executing. If results are thin, say so honestly and offer to refine. You are building a knowledge base, not generating content. The difference is provenance.

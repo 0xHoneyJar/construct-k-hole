@@ -80,7 +80,7 @@ The orchestrator runs four phases in sequence:
    - Second round of grounded search on gap queries
    - Final exhaustive synthesis merging all findings
 3. Cross-topic synthesis identifying patterns across all domains
-4. All outputs saved to `grimoires/k-hole/research-output/` (pack) or `scripts/research-output/` (standalone)
+4. All outputs saved to `scripts/research-output/`
 
 **Output:** Individual topic research documents + cross-topic synthesis
 
@@ -100,25 +100,41 @@ The orchestrator runs four phases in sequence:
 
 **Output:** Final organized research collection ready for use
 
-## Dispatching Research Subagents
-
-When dispatching subagents for parallel topic research (via Agent tool), **include script instructions in the subagent prompt**. Subagents do not inherit /forge context.
-
-Include this in each research subagent prompt:
-```
-You MUST use the deep-research script. Do NOT use WebSearch or WebFetch.
-Run: npx tsx .claude/constructs/packs/k-hole/scripts/deep-research.ts --config <slug> --topic <topic-id>
-Credentials resolve automatically from ~/.loa/credentials.json.
-Parse JSON from stdout. Progress goes to stderr.
-```
-
 ## Environment Requirements
 
-Credentials are resolved via cascade: shell env → project `.env` → `~/.loa/credentials.json`.
-1. `GEMINI_API_KEY` or `GOOGLE_API_KEY` (required — check with `loa-credentials.sh status`)
-2. `FIRECRAWL_API_KEY` (optional, enables deep URL scraping)
-3. Node.js and `tsx` available (`npx tsx` must work)
+Before running, verify:
+1. `GEMINI_API_KEY` or `GOOGLE_API_KEY` is set in `.env`
+2. `FIRECRAWL_API_KEY` is set in `.env` (optional, enables deep URL scraping)
+3. Node.js and `tsx` are available (`npx tsx` must work)
 4. The `scripts/` directory exists with `deep-research.ts`
+
+## Cancellation and User Override
+
+If the user cancels, skips, or redirects at any checkpoint:
+
+1. **Save current state** to the trail/output files before changing direction. Do NOT discard partial results.
+2. **Do NOT re-run cancelled phases** unless the user explicitly re-requests them.
+3. **Acknowledge the redirect** — name what you're setting aside and what you're picking up.
+4. **Offer resumption** — "Partial results for topics A, B saved to [path]. We can resume later."
+
+If the user says "skip topic X" mid-pipeline:
+- Mark topic X as skipped in the output
+- Continue with remaining topics
+- Do NOT re-insert topic X into later phases
+
+If the user says "stop" during any phase:
+- Complete the currently-running operation (don't kill mid-write)
+- Save all partial output
+- Present what you have so far
+
+## Negative Constraints
+
+- **NEVER fabricate sources.** Pipeline outputs are reference documents. Every source must trace to the script's actual findings.
+- **NEVER substitute your own web search for the research script** unless the script exits with an error.
+- **NEVER present discovery results as deep research.** Phase 1 maps the landscape. Phase 2 provides depth. They serve different purposes.
+- **Do NOT silently skip phases.** If you skip discovery and go straight to deep research, the user loses the steering checkpoint.
+- **Do NOT run Phase 3 (deep research) without Phase 2 (config) approval.** The user must see and approve the config before committing API calls.
+- **Do NOT merge topics without user consent.** If two topics seem overlapping, flag it — don't silently collapse them.
 
 ## Error Handling
 
