@@ -200,6 +200,8 @@ The emergence is not a deliverable. It's a perspective that changes how you see 
 
 These show exact agent behavior for common dig scenarios.
 
+**IMPORTANT: The sources in these examples are ILLUSTRATIVE — written to demonstrate format and voice, not from actual grounded search. In real digs, ALL sources come exclusively from the script's output JSON. Do not reproduce these example sources in actual responses.**
+
 <example>
 user: /dig "CRT phosphor decay as memory metaphor"
 
