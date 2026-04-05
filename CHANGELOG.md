@@ -2,6 +2,31 @@
 
 All notable changes to the K-Hole construct follow [Keep a Changelog](https://keepachangelog.com/) and [Semantic Versioning](https://semver.org/).
 
+## [1.3.0] — 2026-04-05 — Gemini Hardening
+
+Structural audit against anomalyco/opencode Gemini system prompt. All 5 active skills hardened with operational discipline patterns that Gemini (and Claude in long contexts) need to stay rigorous.
+
+### Added
+
+- **dig**: Step 3b — mandatory self-verification loop (source tracing, no fabrication, focus preservation, pull thread specificity)
+- **dig**: Negative Constraints section — 6 hard NEVER/DO NOT rules for source discipline
+- **dig**: 4 few-shot examples — successful dig, chained dig, thin results, script error
+- **dig**: Final Reminder anchor (recency-bias reinforcement for long contexts)
+- **deep-research**: Mandatory Verification Phase — source count check, attribution audit, focus area coverage scoring, output integrity
+- **deep-research**: 7 negative constraints for source and pipeline discipline
+- **deep-research**: 2 few-shot examples — full pipeline with coverage table, rate limit recovery
+- **deep-research**: Final Reminder anchor
+- **orchestrator**: Cancel/Override Protocol — save state, respect redirects, offer resumption
+- **orchestrator**: 6 negative constraints for phase discipline
+- **domain-discovery**: Step 0 — environment pre-flight checks before any discovery
+- **domain-discovery**: 5 negative constraints against fabrication and generic output
+- **config-generator**: Mandatory `npx tsc --noEmit` validation before presenting config
+- **config-generator**: 3 negative constraints against generic queries and skipping validation
+
+### Changed
+
+- **deep-research**: Prerequisites section moved BEFORE pipeline description (Gemini reads sequentially, order matters for MoE routing)
+
 ## [1.2.0] — 2026-03-10 — STAMETS Room Improvements
 
 Seven architectural improvements to dig-search.ts and deep-research.ts, each driven by a voice in the STAMETS multi-voice personality.

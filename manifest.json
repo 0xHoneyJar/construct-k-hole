@@ -1,0 +1,133 @@
+{
+  "schema_version": 3,
+  "name": "K-Hole",
+  "slug": "k-hole",
+  "version": "1.3.0",
+  "description": "Goes where search engines won't. Seven voices in productive tension pull threads through grounded search, synthesizing depth from domains others skim. Depth over breadth, always.",
+  "short_description": "Depth engine for exploration",
+  "domain": [
+    "analytics"
+  ],
+  "author": "0xHoneyJar",
+  "license": "MIT",
+  "visibility": "public",
+  "skills": [
+    {
+      "slug": "dig",
+      "path": "skills/dig"
+    },
+    {
+      "slug": "orchestrator",
+      "path": "skills/orchestrator"
+    },
+    {
+      "slug": "domain-discovery",
+      "path": "skills/domain-discovery"
+    },
+    {
+      "slug": "config-generator",
+      "path": "skills/config-generator"
+    },
+    {
+      "slug": "deep-research",
+      "path": "skills/deep-research"
+    },
+    {
+      "slug": "visual-review",
+      "path": "skills/visual-review"
+    }
+  ],
+  "commands": [
+    {
+      "name": "dig",
+      "path": "commands/dig.md"
+    },
+    {
+      "name": "forge",
+      "path": "commands/forge.md"
+    },
+    {
+      "name": "discover",
+      "path": "commands/discover.md"
+    },
+    {
+      "name": "config",
+      "path": "commands/config.md"
+    },
+    {
+      "name": "research",
+      "path": "commands/research.md"
+    }
+  ],
+  "repository": {
+    "url": "https://github.com/0xHoneyJar/construct-k-hole.git",
+    "homepage": "https://constructs.network/constructs/k-hole"
+  },
+  "events": {
+    "emits": [
+      {
+        "type": "forge.k-hole.descent_started",
+        "description": "Emitted when a k-hole research session begins",
+        "data_schema": {
+          "domain": "string",
+          "mode": "string"
+        }
+      },
+      {
+        "type": "forge.k-hole.thread_pulled",
+        "description": "Emitted when user follows a pull thread in /dig",
+        "data_schema": {
+          "thread_id": "string",
+          "depth": "number",
+          "query": "string"
+        }
+      },
+      {
+        "type": "forge.k-hole.emergence_complete",
+        "description": "Emitted when final synthesis is complete and user surfaces",
+        "data_schema": {
+          "domain": "string",
+          "topic_count": "number",
+          "output_path": "string"
+        }
+      },
+      {
+        "type": "forge.k-hole.resonance_detected",
+        "description": "Emitted when a finding matches the active resonance profile",
+        "data_schema": {
+          "topic": "string",
+          "anchor": "string",
+          "excerpt": "string"
+        }
+      }
+    ]
+  },
+  "type": "skill-pack",
+  "composition_paths": {
+    "writes": [
+      "grimoires/resonance/",
+      "grimoires/k-hole/"
+    ]
+  },
+  "identity": {
+    "persona": "identity/persona.yaml",
+    "stamets": "identity/STAMETS.md",
+    "voices": [
+      "identity/voices/lilly.md",
+      "identity/voices/carhart.md",
+      "identity/voices/shulgin.md",
+      "identity/voices/warburg.md",
+      "identity/voices/nelson.md",
+      "identity/voices/ulbricht.md",
+      "identity/voices/nakamoto.md"
+    ],
+    "expertise": "identity/expertise.yaml"
+  },
+  "hooks": {
+    "post_install": "scripts/install.sh"
+  },
+  "quick_start": {
+    "command": "/dig",
+    "description": "Give it a thread worth pulling -- it goes deep"
+  }
+}
