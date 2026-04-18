@@ -93,11 +93,16 @@ const PROJECT_ROOT = findProjectRoot(process.cwd());
 // where agents pass GOOGLE_API_KEY="$(grep ...)" with literal quotes leaking through
 const GEMINI_KEY = (process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || "")
   .replace(/^["']|["']$/g, "").trim();
-if (!GEMINI_KEY) {
+const OPENROUTER_KEY = (process.env.OPENROUTER_API_KEY || "")
+  .replace(/^["']|["']$/g, "").trim();
+// Prefer OpenRouter when present — more robust (no 403 quota issues, unified model access);
+// Gemini direct remains as automatic fallback when OPENROUTER_KEY is set.
+const USE_OPENROUTER = !!OPENROUTER_KEY;
+if (!GEMINI_KEY && !OPENROUTER_KEY) {
   console.log(
     JSON.stringify({
-      error: "Missing GEMINI_API_KEY or GOOGLE_API_KEY in .env",
-      hint: "Get a key at https://aistudio.google.com/apikey",
+      error: "Missing OPENROUTER_API_KEY (preferred) or GEMINI_API_KEY/GOOGLE_API_KEY in .env",
+      hint: "Get OpenRouter key at https://openrouter.ai/keys or Gemini at https://aistudio.google.com/apikey",
     })
   );
   process.exit(1);
@@ -306,6 +311,167 @@ async function geminiCall(
   return { status: "error", error: "Exhausted retries" };
 }
 
+// ─── OpenRouter API ─────────────────────────────────────────────
+// OpenAI-compatible endpoint; uses `:online` suffix for grounded web search.
+// OpenRouter routes to Gemini, GPT, Claude, etc. under one auth + unified billing.
+// This sidesteps Gemini direct's billing/quota 403s.
+
+function toOpenRouterModel(geminiModel: string, withSearch: boolean): string {
+  // Map Gemini-style model names to OpenRouter slugs.
+  let base = geminiModel;
+  if (geminiModel === "gemini-3-flash-preview") base = "google/gemini-2.5-flash";
+  else if (geminiModel.startsWith("gemini-")) base = `google/${geminiModel}`;
+  else if (!geminiModel.includes("/")) base = `google/${geminiModel}`;
+  // :online suffix enables web search grounding via OpenRouter's web plugin
+  return withSearch ? `${base}:online` : base;
+}
+
+async function openrouterCall(
+  model: string,
+  prompt: string,
+  opts?: {
+    search?: boolean;
+    maxTokens?: number;
+    temperature?: number;
+  }
+): Promise<GeminiCallResult> {
+  const { search = false, maxTokens = 8192, temperature = 0.7 } = opts ?? {};
+  const orModel = toOpenRouterModel(model, search);
+  const url = "https://openrouter.ai/api/v1/chat/completions";
+
+  const body: Record<string, unknown> = {
+    model: orModel,
+    messages: [{ role: "user", content: prompt }],
+    temperature,
+    max_tokens: maxTokens,
+  };
+
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const controller = new AbortController();
+    const timeoutMs = search ? 90_000 : 60_000;
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+    try {
+      const res = await fetch(url, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${OPENROUTER_KEY}`,
+          "Content-Type": "application/json",
+          "HTTP-Referer": "https://purupuru.world",
+          "X-Title": "Purupuru Dig",
+        },
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      });
+
+      if (!res.ok) {
+        const errText = await res.text();
+        if (
+          res.status === 404 ||
+          errText.toLowerCase().includes("not found") ||
+          errText.toLowerCase().includes("not available")
+        ) {
+          return {
+            status: "model_not_found",
+            error: `${orModel}: ${errText.slice(0, 150)}`,
+          };
+        }
+        if (res.status === 429 || res.status >= 500) {
+          if (attempt < 2) {
+            const wait = (attempt + 1) * 3000 + Math.random() * 2000;
+            process.stderr.write(
+              `[dig] OpenRouter retry ${attempt + 1}/3 after ${res.status}...\n`,
+            );
+            await new Promise((r) => setTimeout(r, wait));
+            continue;
+          }
+        }
+        return {
+          status: "error",
+          error: `OpenRouter ${res.status}: ${errText.slice(0, 200)}`,
+        };
+      }
+
+      const data = await res.json();
+      const choice = data.choices?.[0];
+      if (!choice) {
+        return { status: "error", error: "No choices in OpenRouter response" };
+      }
+
+      const text = choice.message?.content || "";
+      if (!text.trim()) {
+        if (attempt < 2) {
+          process.stderr.write(`[dig] OpenRouter empty response, retrying...\n`);
+          await new Promise((r) => setTimeout(r, 2000));
+          continue;
+        }
+        return {
+          status: "success",
+          response: { text: "[Empty response]", sources: [], supports: [], webSearchQueries: [] },
+        };
+      }
+
+      // Extract sources from OpenRouter's annotations (url_citation objects)
+      const annotations = choice.message?.annotations || [];
+      const sources = annotations
+        .filter((a: { type?: string }) => a.type === "url_citation")
+        .map((a: { url_citation?: { url?: string; title?: string } }) => {
+          const uri = a.url_citation?.url || "";
+          let title = a.url_citation?.title || "";
+          if (!title && uri) {
+            try {
+              title = new URL(uri).hostname;
+            } catch {
+              title = "?";
+            }
+          }
+          return { title: title || "?", uri };
+        });
+
+      return {
+        status: "success",
+        response: { text, sources, supports: [], webSearchQueries: [] },
+      };
+    } catch (err) {
+      if (err instanceof DOMException && err.name === "AbortError") {
+        process.stderr.write(`[dig] OpenRouter timed out (${timeoutMs / 1000}s), retrying...\n`);
+      }
+      if (attempt < 2) {
+        await new Promise((r) => setTimeout(r, (attempt + 1) * 3000));
+        continue;
+      }
+      return { status: "error", error: String(err) };
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
+  return { status: "error", error: "Exhausted retries" };
+}
+
+// ─── Router ─────────────────────────────────────────────────────
+// Picks OpenRouter when available (preferred), falls back to Gemini direct on failure.
+
+async function searchCall(
+  model: string,
+  prompt: string,
+  opts?: { search?: boolean; maxTokens?: number; temperature?: number },
+): Promise<GeminiCallResult> {
+  if (USE_OPENROUTER) {
+    const result = await openrouterCall(model, prompt, opts);
+    if (result.status === "success") return result;
+    // Fall through to Gemini direct if OpenRouter failed and GEMINI_KEY is configured
+    if (GEMINI_KEY) {
+      process.stderr.write(
+        `[dig] OpenRouter failed (${result.error.slice(0, 60)}), falling back to Gemini direct...\n`,
+      );
+      return geminiCall(model, prompt, opts);
+    }
+    return result;
+  }
+  return geminiCall(model, prompt, opts);
+}
+
 async function gemini(
   prompt: string,
   opts?: {
@@ -322,7 +488,7 @@ async function gemini(
       process.stderr.write(`[dig] Trying fallback model: ${model}...\n`);
     }
 
-    const result = await geminiCall(model, prompt, opts);
+    const result = await searchCall(model, prompt, opts);
 
     if (result.status === "success") {
       if (model !== activeModel) {
