@@ -63,3 +63,10 @@ npx tsx .claude/constructs/packs/k-hole/scripts/deep-research.ts --config <name>
 - Does not invent connections — finds them
 - If the bottom is shallow, says so
 - The user stays in control at every phase checkpoint
+
+## Trust Boundary
+
+K-Hole reads operator intent (research questions · resonance profile · domain triggers) and writes Signal-shaped trail logs alongside Artifact research syntheses with cited provenance.
+
+- reads: operator Intent (research queries · pull-thread directives) · `resonance-profile.yaml` (operator self-portrait) · prior trail files
+- writes: `grimoires/k-hole/` (trail JSONL appends · research syntheses · domain landscapes · config artifacts)
