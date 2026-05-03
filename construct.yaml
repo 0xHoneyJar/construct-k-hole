@@ -41,6 +41,9 @@ commands:
 repository:
   url: https://github.com/0xHoneyJar/construct-k-hole.git
   homepage: https://constructs.network/constructs/k-hole
+streams:
+  reads: [Intent, Operator-Model]
+  writes: [Signal, Artifact]
 events:
   emits:
     - type: forge.k-hole.descent_started
