@@ -162,6 +162,24 @@ const DIG_FALLBACK_MODELS = [
 
 let activeModel = MODEL_PRIMARY;
 
+// One-time stderr advisory when the CLI subscription path is selected even
+// though the operator has API keys in the environment. The env scrub is
+// deliberate (subscription quota > paid balance and dodges 429s on Pro), but
+// users who explicitly set GEMINI_API_KEY may be confused that it's not being
+// honored. Surfacing the rationale once is friendlier than a silent override.
+// (closes bridgebuilder F9)
+let cliAuthNoticeShown = false;
+function maybeNotifyCliSubscriptionAuth(): void {
+  if (cliAuthNoticeShown) return;
+  if (!HAS_GEMINI_CLI || FORCE_REST) return;
+  if (!(GEMINI_KEY || OPENROUTER_KEY)) return;
+  cliAuthNoticeShown = true;
+  process.stderr.write(
+    `[dig] Using gemini CLI subscription auth (OAuth via ~/.gemini/settings.json). ` +
+    `Set DIG_FORCE_REST=1 to use your API-key provider instead.\n`,
+  );
+}
+
 // ─── Gemini API ──────────────────────────────────────────────────
 
 interface GeminiResponse {
@@ -484,6 +502,9 @@ async function openrouterCall(
 
 
 const HAS_GEMINI_CLI = (() => {
+  // Skip the probe entirely when DIG_FORCE_REST=1 — no point paying the
+  // subprocess startup latency only to ignore the result downstream (F8).
+  if (process.env.DIG_FORCE_REST === "1") return false;
   try {
     // Cross-platform detection: prefer `gemini --version` directly, since
     // `which` is unix-only (Windows uses `where`). A direct version probe
@@ -790,7 +811,19 @@ async function searchCall(
   let sawModelNotFound = false;
   let lastError = "";
 
+  // Fail-fast when no provider is configured at all (closes bridgebuilder F1).
+  // The router will still produce a structured error downstream, but bailing
+  // here keeps the error close to startup so callers don't waste cycles on
+  // an unworkable config.
+  if (!HAS_GEMINI_CLI && !USE_OPENROUTER && !GEMINI_KEY) {
+    return {
+      status: "error",
+      error: "No Gemini provider configured. Either run `gemini` once to authenticate the CLI (subscription auth via ~/.gemini/settings.json), set OPENROUTER_API_KEY, or set GEMINI_API_KEY / GOOGLE_API_KEY.",
+    };
+  }
+
   if (HAS_GEMINI_CLI && !FORCE_REST) {
+    maybeNotifyCliSubscriptionAuth();
     const result = await geminiCliCall(model, prompt, opts);
     if (result.status === "success") return result;
     if (result.status === "model_not_found") sawModelNotFound = true;

@@ -110,14 +110,16 @@ const MODEL = MODEL_ALIASES[MODEL_REQUESTED] || MODEL_REQUESTED;
 
 const ASPECT = getArg("aspect") || "1:1";
 const SIZE_RAW = getArg("size") || "1K";
-const SIZE = /^(512|1k|2k|4k)$/i.test(SIZE_RAW) ? SIZE_RAW.toUpperCase().replace("512", "512") : "1K";
+// Normalize to canonical case: 1K / 2K / 4K stay uppercase; 512 has no
+// lowercase form so toUpperCase is a no-op there. Anything off-list defaults
+// to 1K to avoid sending the API an invalid imageSize.
+const SIZE = /^(512|1k|2k|4k)$/i.test(SIZE_RAW) ? SIZE_RAW.toUpperCase() : "1K";
 
 const N = Math.min(Math.max(parseInt(getArg("n") || "1", 10), 1), 8);
 
 const OUT_DIR_OVERRIDE = getArg("out");
-const FINAL_OUT_DIR = OUT_DIR_OVERRIDE
-  ? (mkdirSync(OUT_DIR_OVERRIDE, { recursive: true }), OUT_DIR_OVERRIDE)
-  : BANANA_OUT;
+if (OUT_DIR_OVERRIDE) mkdirSync(OUT_DIR_OVERRIDE, { recursive: true });
+const FINAL_OUT_DIR = OUT_DIR_OVERRIDE || BANANA_OUT;
 
 const INPUT_IMAGES = getMultiArg("image");
 
@@ -189,16 +191,23 @@ async function callBanana(): Promise<BananaResponse> {
     },
   ];
 
+  // The shape `generationConfig.responseFormat.image.{aspectRatio,imageSize}`
+  // is what ai.google.dev/gemini-api/docs/image-generation documents as of
+  // the cycle's fetch. Unknown fields are silently ignored by the API rather
+  // than producing an error, so misconfiguration shows up as default-1:1-1K
+  // output rather than a 400 — we verify the returned image dimensions
+  // against the requested aspect/size in main() and surface a stderr warning
+  // when they diverge (closes bridgebuilder F11).
   const body: Record<string, unknown> = {
     contents,
     generationConfig: {
       responseModalities: ["TEXT", "IMAGE"],
-      // imageConfig is the v1beta field name (some doc revisions also accept
-      // responseFormat.image — imageConfig is the stable post-2025-10 path).
-      imageConfig: {
-        aspectRatio: ASPECT,
-        imageSize: SIZE,
-        ...(N > 1 ? { numberOfImages: N } : {}),
+      responseFormat: {
+        image: {
+          aspectRatio: ASPECT,
+          imageSize: SIZE,
+          ...(N > 1 ? { numberOfImages: N } : {}),
+        },
       },
     },
   };
@@ -267,6 +276,36 @@ function extToMime(mime: string): string {
   return ".png";
 }
 
+// Read PNG dimensions from raw bytes (PNG IHDR is at offset 16-23 after the
+// 8-byte signature). Used to verify the API honored our aspect/size request.
+function readPngDimensions(buf: Buffer): { width: number; height: number } | null {
+  if (buf.length < 24) return null;
+  const sig = buf.subarray(0, 8);
+  if (sig.toString("hex") !== "89504e470d0a1a0a") return null;
+  const width = buf.readUInt32BE(16);
+  const height = buf.readUInt32BE(20);
+  return { width, height };
+}
+
+// Map an imageSize string to the documented short-side pixel count so we can
+// sanity-check the API's response. Returns null for unknown sizes.
+function sizeStringToPixels(s: string): number | null {
+  if (s === "512") return 512;
+  if (s === "1K") return 1024;
+  if (s === "2K") return 2048;
+  if (s === "4K") return 4096;
+  return null;
+}
+
+// Check if width:height matches the requested aspect ratio within ±2% tolerance.
+function aspectMatches(width: number, height: number, requested: string): boolean {
+  const m = requested.match(/^(\d+):(\d+)$/);
+  if (!m) return true; // unknown aspect format — skip check
+  const targetRatio = parseInt(m[1], 10) / parseInt(m[2], 10);
+  const actualRatio = width / height;
+  return Math.abs(actualRatio - targetRatio) / targetRatio < 0.02;
+}
+
 // ─── Main ───────────────────────────────────────────────────────
 
 async function main() {
@@ -283,16 +322,48 @@ async function main() {
   const images: { path: string; mime: string; bytes: number }[] = [];
   const textParts: string[] = [];
 
+  const requestedPx = sizeStringToPixels(SIZE);
+  type ImageRecord = {
+    path: string; mime: string; bytes: number;
+    width?: number; height?: number; aspect_matches?: boolean; size_matches?: boolean;
+  };
+  const imageRecords: ImageRecord[] = [];
+
   for (const cand of data.candidates || []) {
     const parts = cand.content?.parts || [];
     for (const part of parts) {
       if (part.inlineData?.data) {
         const mime = part.inlineData.mimeType || "image/png";
         const ext = extToMime(mime);
-        const filename = `${ts}_${stem}_${images.length + 1}${ext}`;
+        const filename = `${ts}_${stem}_${imageRecords.length + 1}${ext}`;
         const path = join(FINAL_OUT_DIR, filename);
         const buf = Buffer.from(part.inlineData.data, "base64");
         writeFileSync(path, buf);
+
+        const rec: ImageRecord = { path, mime, bytes: buf.byteLength };
+        // Verify the API honored our aspect/size request — PNG only since
+        // dimensions are trivial to parse. Surfaces silent misconfiguration
+        // (e.g. wrong field name → default 1:1 1K output).
+        if (mime === "image/png") {
+          const dims = readPngDimensions(buf);
+          if (dims) {
+            rec.width = dims.width;
+            rec.height = dims.height;
+            rec.aspect_matches = aspectMatches(dims.width, dims.height, ASPECT);
+            if (requestedPx) {
+              // "Short side ≈ requested px" within ±5% tolerance
+              const shortSide = Math.min(dims.width, dims.height);
+              rec.size_matches = Math.abs(shortSide - requestedPx) / requestedPx < 0.05;
+            }
+            if (rec.aspect_matches === false) {
+              progress("banana", `WARN: returned ${dims.width}x${dims.height} doesn't match requested aspect ${ASPECT}`);
+            }
+            if (rec.size_matches === false) {
+              progress("banana", `WARN: returned short side ${Math.min(dims.width, dims.height)}px doesn't match requested ${SIZE} (${requestedPx}px)`);
+            }
+          }
+        }
+        imageRecords.push(rec);
         images.push({ path, mime, bytes: buf.byteLength });
         progress("banana", `wrote ${filename} (${(buf.byteLength / 1024).toFixed(0)}KB)`);
       } else if (part.text) {
@@ -318,11 +389,14 @@ async function main() {
     aspect_ratio: ASPECT,
     image_size: SIZE,
     requested_count: N,
-    returned_count: images.length,
-    images: images.map((i) => ({
+    returned_count: imageRecords.length,
+    images: imageRecords.map((i) => ({
       path: i.path,
       mime_type: i.mime,
       bytes: i.bytes,
+      ...(i.width !== undefined ? { width: i.width, height: i.height } : {}),
+      ...(i.aspect_matches !== undefined ? { aspect_matches: i.aspect_matches } : {}),
+      ...(i.size_matches !== undefined ? { size_matches: i.size_matches } : {}),
     })),
     response_text: textParts.join("\n") || null,
     input_references: INPUT_IMAGES,
