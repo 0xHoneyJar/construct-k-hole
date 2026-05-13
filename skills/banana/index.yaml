@@ -1,0 +1,30 @@
+name: Banana
+slug: banana
+description: >
+  Image generation via Google's Nano Banana family (gemini-3.1-flash-image-preview,
+  gemini-3-pro-image-preview, gemini-2.5-flash-image). Takes a descriptive prompt
+  plus optional reference images and writes PNG assets to disk. Closes the
+  k-hole research-to-render loop: /dig produces synthesis, /banana renders it.
+triggers:
+  - banana
+  - nano banana
+  - render an image
+  - generate an image
+  - visualize this brief
+  - image generation
+  - text to image
+capabilities:
+  model_tier: flash
+  danger_level: moderate
+  effort_hint: small
+  downgrade_allowed: false
+  execution_hint: sequential
+  requires:
+    native_runtime: true
+    tool_calling: false
+    thinking_traces: false
+    vision: false
+scripts:
+  - name: banana
+    path: scripts/banana.ts
+    runtime: npx tsx

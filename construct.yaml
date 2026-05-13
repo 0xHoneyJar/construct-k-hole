@@ -25,6 +25,9 @@ skills:
   # Visual analysis (multimodal)
   - slug: visual-review
     path: skills/visual-review
+  # Visual generation (Nano Banana family)
+  - slug: banana
+    path: skills/banana
 
 commands:
   - name: dig
@@ -37,6 +40,8 @@ commands:
     path: commands/config.md
   - name: research
     path: commands/research.md
+  - name: banana
+    path: commands/banana.md
 
 repository:
   url: https://github.com/0xHoneyJar/construct-k-hole.git
