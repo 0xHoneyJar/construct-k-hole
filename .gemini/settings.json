@@ -1,0 +1,9 @@
+{
+  "skills": {
+    "disabled": [
+      "gemini-deep-research",
+      "find-skills",
+      "vercel-react-best-practices"
+    ]
+  }
+}

@@ -33,6 +33,15 @@ import { tmpdir } from "os";
 // ─── Config ─────────────────────────────────────────────────────
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
+const REPO_ROOT = dirname(SCRIPT_DIR);
+
+// Synthesis-only policy: denies the gemini CLI's agentic tools so the
+// model produces a plain text completion instead of an agent loop. The
+// long V2 synthesis prompt otherwise triggers invoke_agent / update_topic
+// calls that either serialize as `call:foo{<ctrl46>...}` text or return
+// empty. Grounded-search calls keep the default toolset so
+// google_web_search remains available.
+const SYNTHESIS_POLICY = join(REPO_ROOT, ".gemini", "synthesis-policies", "deny-all-tools.toml");
 
 // Walk up from startDir to find a project root (.git or .claude/).
 function findProjectRoot(startDir: string): string | null {
@@ -640,8 +649,12 @@ async function geminiCliCall(
       "--approval-mode", "plan",
       "--output-format", "json",
       "-m", cliModel,
-      "-p", wrappedPrompt,
     ];
+    // Synthesis calls must deny all tools — see SYNTHESIS_POLICY comment.
+    if (!search && existsSync(SYNTHESIS_POLICY)) {
+      args.push("--policy", SYNTHESIS_POLICY);
+    }
+    args.push("-p", wrappedPrompt);
     // Scrub auth env vars that would push the CLI off subscription/OAuth
     // (~/.gemini/settings.json) and onto rate-limited API-key auth. The
     // dig-search script auto-loads GEMINI_API_KEY / GOOGLE_API_KEY from .env
@@ -669,6 +682,9 @@ async function geminiCliCall(
     const child = spawn("gemini", args, {
       env: cliEnv as NodeJS.ProcessEnv,
       stdio: ["ignore", outFd, errFd],
+      // Run from repo root so workspace .gemini/settings.json (which
+      // disables agent skills like gemini-deep-research) is discovered.
+      cwd: REPO_ROOT,
     });
     // Cleanup function — closes fds and removes temp files; idempotent.
     let cleaned = false;

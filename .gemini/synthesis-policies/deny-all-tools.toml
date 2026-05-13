@@ -1,0 +1,85 @@
+# Deny every built-in tool so the model cannot enter agent mode and
+# returns a plain text completion instead. Without this, the V2 synthesis
+# prompt triggers invoke_agent / update_topic / write_file loops that
+# either serialize as `call:foo{...<ctrl46>}` text or return empty.
+#
+# We can't use toolName = "*" because the CLI sends a malformed
+# tools[0] descriptor to the API in that case (400 Bad Request).
+# Enumerated below are all tool names found in the gemini-cli 0.42.0
+# bundle. Used only for the synthesis call; grounded-search calls keep
+# the default toolset so google_web_search is available.
+
+[[rule]]
+toolName = "invoke_agent"
+decision = "deny"
+priority = 100
+
+[[rule]]
+toolName = "update_topic"
+decision = "deny"
+priority = 100
+
+[[rule]]
+toolName = "read_file"
+decision = "deny"
+priority = 100
+
+[[rule]]
+toolName = "write_file"
+decision = "deny"
+priority = 100
+
+[[rule]]
+toolName = "replace"
+decision = "deny"
+priority = 100
+
+[[rule]]
+toolName = "edit"
+decision = "deny"
+priority = 100
+
+[[rule]]
+toolName = "list_directory"
+decision = "deny"
+priority = 100
+
+[[rule]]
+toolName = "ls"
+decision = "deny"
+priority = 100
+
+[[rule]]
+toolName = "glob"
+decision = "deny"
+priority = 100
+
+[[rule]]
+toolName = "grep"
+decision = "deny"
+priority = 100
+
+[[rule]]
+toolName = "read_many_files"
+decision = "deny"
+priority = 100
+
+[[rule]]
+toolName = "run_shell_command"
+decision = "deny"
+priority = 100
+
+[[rule]]
+toolName = "web_fetch"
+decision = "deny"
+priority = 100
+
+[[rule]]
+toolName = "google_web_search"
+decision = "deny"
+priority = 100
+
+[[rule]]
+toolName = "codebase_investigator"
+decision = "deny"
+priority = 100
