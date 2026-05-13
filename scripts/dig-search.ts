@@ -21,9 +21,14 @@ import {
   mkdirSync,
   existsSync,
   appendFileSync,
+  unlinkSync,
+  openSync,
+  closeSync,
 } from "fs";
 import { join, dirname, resolve, relative } from "path";
 import { fileURLToPath } from "url";
+import { spawn, spawnSync } from "child_process";
+import { tmpdir } from "os";
 
 // ─── Config ─────────────────────────────────────────────────────
 
@@ -316,10 +321,19 @@ async function geminiCall(
 
 function toOpenRouterModel(geminiModel: string, withSearch: boolean): string {
   // Map Gemini-style model names to OpenRouter slugs.
+  // Preview models exposed by the gemini CLI / native REST may not have
+  // corresponding OpenRouter slugs yet; degrade to the closest published
+  // model so OpenRouter remains a viable fallback rather than 404'ing.
   let base = geminiModel;
-  if (geminiModel === "gemini-3-flash-preview") base = "google/gemini-2.5-flash";
-  else if (geminiModel.startsWith("gemini-")) base = `google/${geminiModel}`;
-  else if (!geminiModel.includes("/")) base = `google/${geminiModel}`;
+  if (geminiModel === "gemini-3-flash-preview" || geminiModel === "gemini-3-flash") {
+    base = "google/gemini-2.5-flash";
+  } else if (geminiModel === "gemini-3-pro-preview" || geminiModel === "gemini-3-pro") {
+    base = "google/gemini-2.5-pro";
+  } else if (geminiModel.startsWith("gemini-")) {
+    base = `google/${geminiModel}`;
+  } else if (!geminiModel.includes("/")) {
+    base = `google/${geminiModel}`;
+  }
   // :online suffix enables web search grounding via OpenRouter's web plugin
   return withSearch ? `${base}:online` : base;
 }
@@ -454,15 +468,18 @@ async function openrouterCall(
 // Loses grounding metadata — returns plain text only — but recovers
 // when the API path is dead.
 
-import { spawn } from "child_process";
-import { tmpdir } from "os";
-import { unlinkSync, openSync, closeSync } from "fs";
 
 const HAS_GEMINI_CLI = (() => {
   try {
-    // Cheap detection: which gemini, swallow output
-    const probe = require("child_process").spawnSync("which", ["gemini"], { encoding: "utf8" });
-    return probe.status === 0 && Boolean(probe.stdout.trim());
+    // Cross-platform detection: prefer `gemini --version` directly, since
+    // `which` is unix-only (Windows uses `where`). A direct version probe
+    // also works for shimmed binaries like `gemini.cmd`.
+    const probe = spawnSync(
+      "gemini",
+      ["--version"],
+      { encoding: "utf8", timeout: 5000, shell: process.platform === "win32" },
+    );
+    return probe.status === 0 && Boolean(probe.stdout?.trim());
   } catch {
     return false;
   }
@@ -638,7 +655,6 @@ async function geminiCliCall(
       let stdout = "";
       let stderr = "";
       try {
-        const { readFileSync } = require("fs") as typeof import("fs");
         stdout = readFileSync(outPath, "utf8");
         stderr = readFileSync(errPath, "utf8");
       } catch (err: any) {
@@ -703,17 +719,18 @@ async function geminiCliCall(
       }
 
       const sources = search ? parseCliSources(text) : [];
-      // Capture which web-search queries the model executed when possible
-      const toolStats = parsed?.stats?.tools?.byName?.google_web_search;
-      const webSearchQueries: string[] = [];
-
+      // The CLI's `--output-format json` doesn't surface the query strings the
+      // model passed to google_web_search (only an aggregate call count under
+      // stats.tools.byName.google_web_search). Leave empty rather than
+      // fabricating queries — REST/OpenRouter still populate this field when
+      // they're the active provider.
       resolveOnce({
         status: "success",
         response: {
           text,
           sources,
           supports: [],
-          webSearchQueries,
+          webSearchQueries: [],
         },
       });
     });
@@ -740,30 +757,45 @@ async function searchCall(
   prompt: string,
   opts?: { search?: boolean; maxTokens?: number; temperature?: number },
 ): Promise<GeminiCallResult> {
+  // Track whether ANY provider returned model_not_found so we only propagate
+  // model_not_found upward when every provider agrees the model doesn't exist.
+  // A single provider's missing-slug is not enough — OpenRouter often lacks
+  // preview names the REST API and CLI carry natively (and vice versa).
+  let sawModelNotFound = false;
+  let lastError = "";
+
   if (HAS_GEMINI_CLI && !FORCE_REST) {
     const result = await geminiCliCall(model, prompt, opts);
     if (result.status === "success") return result;
-    // model_not_found is propagated upward to trigger the fallback-model
-    // chain in `gemini()`; only fall through providers on transient errors.
-    if (result.status === "model_not_found") return result;
+    if (result.status === "model_not_found") sawModelNotFound = true;
+    lastError = result.error;
     process.stderr.write(
-      `[dig] Gemini CLI failed (${result.error.slice(0, 80)}), trying next provider...\n`,
+      `[dig] Gemini CLI ${result.status === "model_not_found" ? "lacks model" : "failed"} (${result.error.slice(0, 80)}), trying next provider...\n`,
     );
   }
   if (USE_OPENROUTER) {
     const result = await openrouterCall(model, prompt, opts);
     if (result.status === "success") return result;
+    if (result.status === "model_not_found") sawModelNotFound = true;
+    lastError = result.error;
     process.stderr.write(
-      `[dig] OpenRouter failed (${result.error.slice(0, 60)}), trying next provider...\n`,
+      `[dig] OpenRouter ${result.status === "model_not_found" ? "lacks model" : "failed"} (${result.error.slice(0, 60)}), trying next provider...\n`,
     );
   }
   if (GEMINI_KEY) {
     const result = await geminiCall(model, prompt, opts);
     if (result.status === "success") return result;
+    if (result.status === "model_not_found") sawModelNotFound = true;
+    lastError = result.error;
     process.stderr.write(
-      `[dig] Gemini REST failed (${result.error.slice(0, 60)})\n`,
+      `[dig] Gemini REST ${result.status === "model_not_found" ? "lacks model" : "failed"} (${result.error.slice(0, 60)})\n`,
     );
-    return result;
+  }
+  if (sawModelNotFound) {
+    return { status: "model_not_found", error: lastError || `${model} not available on any configured provider` };
+  }
+  if (lastError) {
+    return { status: "error", error: lastError };
   }
   return {
     status: "error",
