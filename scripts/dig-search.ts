@@ -13,6 +13,15 @@
  *   npx tsx scripts/dig-search.ts --query "your thread" --model gemini-2.5-pro
  *   npx tsx scripts/dig-search.ts --query "your thread" --scout
  *   npx tsx scripts/dig-search.ts --query "your thread" --depth 3 --stream
+ *   npx tsx scripts/dig-search.ts --query "your thread" --envelopes path/to/envelopes/
+ *
+ * PULLING-THREADS primitive — --envelopes:
+ *   Point at a creative-resonance-envelope (a JSON file) or a directory of
+ *   them. The activated envelopes' `threads_to_pull` become seed queries for
+ *   this dig — closing the loop where one dig's surfaced threads feed the
+ *   next dig's input. Seeds never crowd out the QUERY: ceil(depth/2) slots
+ *   are always reserved for query-derived searches. At --depth 1 the single
+ *   slot goes to the QUERY and seeds are ignored with a note.
  *
  * DEPTH visibility — --stream:
  *   Turns stdout into NDJSON — one `search` (or `search_error`) event per
@@ -44,6 +53,8 @@ import {
   unlinkSync,
   openSync,
   closeSync,
+  readdirSync,
+  statSync,
 } from "fs";
 import { join, dirname, resolve, relative } from "path";
 import { fileURLToPath } from "url";
@@ -225,6 +236,13 @@ export function __getAccumulator(): SettledSearch[] {
 function emitEvent(evt: Record<string, unknown>): void {
   process.stdout.write(JSON.stringify(evt) + "\n");
 }
+
+// ─── PULLING-THREADS primitive: envelope seeds (FR-4) ────────────
+// --envelopes <path> activates a creative-resonance-envelope (a JSON file) or
+// a directory of them. The activated envelopes' `threads_to_pull` become seed
+// queries for this dig — closing the loop where one dig's surfaced threads
+// feed the next dig's input. Seeds never crowd out the QUERY (planSearchQueries).
+const ENVELOPES_PATH = getArg("envelopes");
 // Default: gemini-3-pro-preview (the gemini CLI resolves this to
 // gemini-3.1-pro-preview server-side — the current latest, per
 // https://deepmind.google/models/gemini/pro/). Pro-tier is required for
@@ -1278,6 +1296,144 @@ function buildSearchQueries(thread: string, depth: number): string[] {
   return queries;
 }
 
+// ─── Envelope seeds (PULLING-THREADS consume · FR-4) ─────────────
+
+// The canonical schema version, read once from the in-repo schema's
+// `x-schema-version`. Consumed envelopes are version-checked against this.
+function inRepoSchemaVersion(): string {
+  try {
+    const schemaPath = join(
+      REPO_ROOT,
+      "schemas",
+      "creative-resonance-envelope.schema.json"
+    );
+    const schema = JSON.parse(readFileSync(schemaPath, "utf-8"));
+    return typeof schema["x-schema-version"] === "string"
+      ? schema["x-schema-version"]
+      : "0.0.0";
+  } catch {
+    return "0.0.0";
+  }
+}
+
+// Resolve --envelopes (a file or a directory of *.json) into a deterministic,
+// deduped list of seed query strings drawn from each envelope's
+// `threads_to_pull`. Untrusted input — parsed defensively (try/catch, no eval),
+// version-checked, never shelled out.
+//   • malformed JSON in a file        → stderr warn, skip that file, continue
+//   • empty dir / no *.json           → stderr note, return []
+//   • envelope schema_version MAJOR ≠ → hard error, exit 2
+//   • envelope schema_version MINOR > → stderr warn, proceed
+function loadEnvelopeSeeds(envPath: string): string[] {
+  const resolved = resolve(process.cwd(), envPath);
+  if (!existsSync(resolved)) {
+    process.stderr.write(`[dig] --envelopes path not found: ${envPath} — no seeds.\n`);
+    return [];
+  }
+
+  let files: string[];
+  if (statSync(resolved).isDirectory()) {
+    files = readdirSync(resolved)
+      .filter((f) => f.endsWith(".json"))
+      .sort() // deterministic file order (IMP-006)
+      .map((f) => join(resolved, f));
+    if (files.length === 0) {
+      process.stderr.write(`[dig] --envelopes dir has no *.json files — no seeds.\n`);
+      return [];
+    }
+  } else {
+    files = [resolved];
+  }
+
+  const canonicalVersion = inRepoSchemaVersion();
+  const canonicalMajor = canonicalVersion.split(".")[0];
+  const seeds: string[] = [];
+  const seen = new Set<string>();
+
+  for (const file of files) {
+    let env: Record<string, unknown>;
+    try {
+      env = JSON.parse(readFileSync(file, "utf-8"));
+    } catch (err) {
+      process.stderr.write(
+        `[dig] --envelopes: skipping unparseable file ${file}: ${String(err).slice(0, 80)}\n`
+      );
+      continue;
+    }
+    if (!env || typeof env !== "object" || Array.isArray(env)) {
+      process.stderr.write(`[dig] --envelopes: skipping non-object envelope ${file}\n`);
+      continue;
+    }
+
+    // Version skew (IMP-008): major mismatch is a hard stop; minor-ahead warns.
+    const envVersion = typeof env.schema_version === "string" ? env.schema_version : "";
+    const envMajor = envVersion.split(".")[0];
+    if (envVersion && envMajor !== canonicalMajor) {
+      console.log(
+        JSON.stringify({
+          error:
+            `Envelope ${file} declares schema_version ${envVersion}; this repo's schema ` +
+            `is ${canonicalVersion}. Major-version mismatch — refusing to consume (the ` +
+            `consume/emit loop must not silently drift).`,
+        })
+      );
+      process.exit(2);
+    }
+    if (envVersion && envVersion !== canonicalVersion) {
+      process.stderr.write(
+        `[dig] --envelopes: ${file} is schema_version ${envVersion} vs in-repo ${canonicalVersion} — proceeding (minor skew).\n`
+      );
+    }
+
+    // threads_to_pull is the optional-tier field FR-4 consumes.
+    const threads = Array.isArray(env.threads_to_pull) ? env.threads_to_pull : [];
+    for (const t of threads) {
+      if (typeof t === "string" && t.trim() && !seen.has(t)) {
+        seen.add(t);
+        seeds.push(t.trim()); // in-array order preserved (IMP-006)
+      }
+    }
+  }
+
+  if (seeds.length === 0) {
+    process.stderr.write(`[dig] --envelopes: activated envelopes carry no threads_to_pull — no seeds.\n`);
+  } else {
+    process.stderr.write(`[dig] --envelopes: ${seeds.length} seed thread(s) loaded.\n`);
+  }
+  return seeds;
+}
+
+// Plan the dig's query set. With no seeds → today's behavior unchanged. With
+// seeds → reserve ceil(depth/2) slots for QUERY-derived queries so the
+// operator's immediate intent is ALWAYS served (IMP-005); seeds fill the
+// remainder, prepended. At depth 1 the single slot goes to the QUERY and seeds
+// are ignored with a note.
+function planSearchQueries(
+  query: string,
+  depth: number,
+  seeds: string[]
+): string[] {
+  if (seeds.length === 0) return buildSearchQueries(query, depth);
+
+  const reserve = Math.ceil(depth / 2);
+  const seedSlots = depth - reserve;
+  const queryDerived = buildSearchQueries(query, reserve);
+
+  if (seedSlots <= 0) {
+    process.stderr.write(
+      `[dig] ${seeds.length} envelope seed(s) ignored — depth ${depth} reserves all slots ` +
+      `for the query. Raise --depth to use seeds.\n`
+    );
+    return queryDerived;
+  }
+
+  const usedSeeds = seeds.slice(0, seedSlots);
+  process.stderr.write(
+    `[dig] ${usedSeeds.length} envelope seed(s) prepended; ${reserve} slot(s) reserved for the query.\n`
+  );
+  return [...usedSeeds, ...queryDerived];
+}
+
 // ─── Synthesis ───────────────────────────────────────────────────
 
 async function synthesize(
@@ -1488,7 +1644,10 @@ async function dig() {
   if (SEARCH_DEPTH === 0) {
     process.stderr.write(`[dig] Depth 0: tank mode \u2014 synthesizing from trail + resonance only\n`);
   } else {
-    const queries = buildSearchQueries(QUERY, SEARCH_DEPTH);
+    // FR-4: --envelopes seeds the query set with threads_to_pull from
+    // activated envelopes — without crowding out the QUERY (planSearchQueries).
+    const seeds = ENVELOPES_PATH ? loadEnvelopeSeeds(ENVELOPES_PATH) : [];
+    const queries = planSearchQueries(QUERY!, SEARCH_DEPTH, seeds);
     process.stderr.write(`[dig] Running ${queries.length} search(es) in parallel...\n`);
 
     // allSettled semantics (IMP-002): each task self-handles its own failure

@@ -196,3 +196,66 @@ test("S3/AC3.4 — accumulator populates unconditionally (non-stream path)", () 
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// ── Scenario 9 — --envelopes seeds the query set, QUERY slots reserved ──
+test("S4/Scenario 9 — --envelopes threads seed queries without crowding out QUERY", () => {
+  const dir = tmp();
+  const statePath = join(dir, "state.json");
+  try {
+    const { status } = runDig(
+      [
+        "--query", "creative tooling",
+        "--depth", "2",
+        "--envelopes", join(FIX, "envelopes", "good"),
+        "--trail", join(dir, "trail.md"),
+      ],
+      { DIG_MOCK_PROVIDER: join(FIX, "deep-seeded.json"), DIG_DUMP_STATE: statePath }
+    );
+    assert.equal(status, 0);
+    const state = JSON.parse(readFileSync(statePath, "utf-8"));
+    const queries = state.accumulator.map(
+      (s: { result?: { query: string }; query?: string }) => s.result?.query ?? s.query
+    );
+    assert.equal(queries.length, 2, "depth 2 → 2 query slots total");
+    // depth 2: reserve ceil(2/2)=1 for the QUERY, 1 slot for a seed (IMP-005).
+    assert.ok(
+      queries.some((q: string) => q.includes("seed thread one")),
+      "an envelope seed thread became a query"
+    );
+    assert.ok(
+      queries.some((q: string) => q.includes("leading practitioners")),
+      "a QUERY-derived query is still present — seeds did not crowd it out"
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// ── Scenario 10 — --envelopes major-version mismatch is a hard stop ──
+test("S4/Scenario 10 — --envelopes major-version mismatch exits 2", () => {
+  const { status, stdout } = runDig([
+    "--query", "x",
+    "--depth", "2",
+    "--envelopes", join(FIX, "envelopes", "bad", "bad-version.json"),
+  ]);
+  assert.equal(status, 2);
+  assert.match(JSON.parse(stdout).error, /[Mm]ajor-version mismatch/);
+});
+
+// ── AC4.3 — malformed / missing --envelopes input degrades gracefully ──
+test("S4/AC4.3 — missing --envelopes path is a note, not a crash", () => {
+  const dir = tmp();
+  try {
+    const { status, stdout, stderr } = runDig(
+      ["--query", "creative tooling", "--depth", "2", "--envelopes", join(dir, "does-not-exist"), "--trail", join(dir, "trail.md")],
+      { DIG_MOCK_PROVIDER: join(FIX, "deep-ok.json") }
+    );
+    // No seeds → falls back to a normal depth-2 dig, exit 0.
+    assert.equal(status, 0);
+    assert.match(stderr, /--envelopes path not found/);
+    const out = JSON.parse(stdout);
+    assert.equal(out.search_count, 2, "fell back to a normal depth-2 dig");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

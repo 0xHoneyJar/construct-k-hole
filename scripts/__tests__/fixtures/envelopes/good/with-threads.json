@@ -1,0 +1,14 @@
+{
+  "schema_version": "0.1.0",
+  "envelope_id": "test-envelope-with-threads",
+  "ref": { "name": "test reference", "type": "concept" },
+  "direction": { "name": "test-direction" },
+  "resonance": { "strength": 0.8, "evidence": ["a concrete checkable reason"] },
+  "why": { "design": "a why-reasoning lens with more than thirty-two characters of content" },
+  "provenance": { "surfaced_by": "test fixture", "ratified_at": "2026-05-14" },
+  "threads_to_pull": [
+    "seed thread one about practitioners",
+    "seed thread two about adjacency",
+    "seed thread one about practitioners"
+  ]
+}
