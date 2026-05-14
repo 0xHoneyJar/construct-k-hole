@@ -35,6 +35,13 @@
  *   provider call no longer collapses the dig — it becomes a search_error and
  *   the dig continues with the surviving searches (`failed_searches` counts them).
  *
+ * DEPTH safety valve — SIGINT / SIGTERM:
+ *   Either signal flushes a `partial: true` artifact (completed searches,
+ *   synthesis: null) to stdout and exits 130 (SIGINT) / 143 (SIGTERM) — a
+ *   clean, automation-detectable exit, not a crash. In-flight fetches are
+ *   cancelled and spawn'd CLI children reaped — no orphans. Abort-with-partial
+ *   is a first-class outcome: discover a wrong question after 2 minutes, not 25.
+ *
  * BREADTH primitive — --scout:
  *   A fast, wide, shallow pass: one search, NO synthesis, source list + a
  *   one-line gist per source. Answers "is this question pointed at the right
@@ -51,6 +58,7 @@
 import {
   readFileSync,
   writeFileSync,
+  writeSync,
   mkdirSync,
   existsSync,
   appendFileSync,
@@ -62,7 +70,7 @@ import {
 } from "fs";
 import { join, dirname, resolve, relative } from "path";
 import { fileURLToPath } from "url";
-import { spawn, spawnSync } from "child_process";
+import { spawn, spawnSync, type ChildProcess } from "child_process";
 import { tmpdir } from "os";
 import { createHash } from "crypto";
 
@@ -230,6 +238,19 @@ type SettledSearch =
 // many digs in one process).
 let accumulator: SettledSearch[] = [];
 
+// FR-3: the SIGINT/SIGTERM escape hatch's shared state.
+//   abortController — its .signal is threaded into every fetch; the signal
+//     handler .abort()s it to genuinely CANCEL in-flight requests (IMP-003 —
+//     abandoning a promise leaves the HTTP request live).
+//   activeChildren — every spawn'd gemini-CLI child registers here so the
+//     handler can kill ALL of them; concurrent searches mean several may be
+//     live at once (SKP-002b — a single handle would orphan the rest).
+//   totalPlannedSearches — set once queries are planned, so a partial artifact
+//     can report completed/total even when SIGINT lands mid-flight.
+const abortController = new AbortController();
+const activeChildren = new Set<ChildProcess>();
+let totalPlannedSearches = 0;
+
 // Test-only observability hook (SDD §6 / IMP-014). The subprocess suite reads
 // the accumulator via the DIG_DUMP_STATE env seam; this export is for the
 // in-process unit tests that S8's dig-lib.ts extraction will enable.
@@ -360,7 +381,10 @@ async function geminiCall(
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
-        signal: controller.signal,
+        // FR-3 (IMP-003): combine the per-call timeout signal with the
+        // module-level abortController so a SIGINT/SIGTERM genuinely cancels
+        // this in-flight request, not just abandons the promise.
+        signal: AbortSignal.any([controller.signal, abortController.signal]),
       });
 
       // Read body exactly once for error responses
@@ -526,7 +550,10 @@ async function openrouterCall(
           "X-Title": "Purupuru Dig",
         },
         body: JSON.stringify(body),
-        signal: controller.signal,
+        // FR-3 (IMP-003): combine the per-call timeout signal with the
+        // module-level abortController so a SIGINT/SIGTERM genuinely cancels
+        // this in-flight request, not just abandons the promise.
+        signal: AbortSignal.any([controller.signal, abortController.signal]),
       });
 
       if (!res.ok) {
@@ -622,6 +649,12 @@ async function openrouterCall(
 // when the API path is dead.
 
 
+// The gemini CLI binary. DIG_CLI_BIN overrides it — used by the test suite to
+// point geminiCliCall's spawn at a fake binary so subprocess registration /
+// reaping (FR-3 / SKP-002b) can be exercised at the spawn seam, which the
+// gemini()-boundary mock cannot reach (SKP-001b).
+const GEMINI_CLI_BIN = process.env.DIG_CLI_BIN || "gemini";
+
 const HAS_GEMINI_CLI = (() => {
   // Skip the probe entirely when DIG_FORCE_REST=1 — no point paying the
   // subprocess startup latency only to ignore the result downstream (F8).
@@ -631,7 +664,7 @@ const HAS_GEMINI_CLI = (() => {
     // `which` is unix-only (Windows uses `where`). A direct version probe
     // also works for shimmed binaries like `gemini.cmd`.
     const probe = spawnSync(
-      "gemini",
+      GEMINI_CLI_BIN,
       ["--version"],
       { encoding: "utf8", timeout: 5000, shell: process.platform === "win32" },
     );
@@ -846,18 +879,23 @@ async function geminiCliCallOnce(
       return;
     }
 
-    const child = spawn("gemini", args, {
+    const child = spawn(GEMINI_CLI_BIN, args, {
       env: cliEnv as NodeJS.ProcessEnv,
       stdio: ["ignore", outFd, errFd],
       // Run from repo root so workspace .gemini/settings.json (which
       // disables agent skills like gemini-deep-research) is discovered.
       cwd: REPO_ROOT,
     });
-    // Cleanup function — closes fds and removes temp files; idempotent.
+    // FR-3 (SKP-002b): register the child so the SIGINT/SIGTERM handler can
+    // reap it. Concurrent searches mean several may be live at once.
+    activeChildren.add(child);
+    // Cleanup function — closes fds, removes the child from the reaper set;
+    // idempotent.
     let cleaned = false;
     const cleanup = () => {
       if (cleaned) return;
       cleaned = true;
+      activeChildren.delete(child);
       try { closeSync(outFd); } catch {}
       try { closeSync(errFd); } catch {}
     };
@@ -1095,6 +1133,13 @@ async function gemini(
     const picked = resolveMock();
     if (picked && typeof picked === "object" && "__error" in (picked as object)) {
       throw new Error(String((picked as { __error: unknown }).__error));
+    }
+    // `__delay_ms` on an entry makes that call hang for N ms — lets the test
+    // suite catch a dig MID-FLIGHT to exercise the FR-3 SIGINT/SIGTERM handler.
+    if (picked && typeof picked === "object" && "__delay_ms" in (picked as object)) {
+      const { __delay_ms, ...rest } = picked as Record<string, unknown>;
+      await new Promise((r) => setTimeout(r, Number(__delay_ms) || 0));
+      return rest as unknown as GeminiResponse;
     }
     return picked as GeminiResponse;
   }
@@ -1824,6 +1869,7 @@ async function dig() {
     // activated envelopes — without crowding out the QUERY (planSearchQueries).
     const seeds = ENVELOPES_PATH ? loadEnvelopeSeeds(ENVELOPES_PATH) : [];
     const queries = planSearchQueries(QUERY!, SEARCH_DEPTH, seeds);
+    totalPlannedSearches = queries.length; // FR-3: for the partial artifact's completed/total.
     process.stderr.write(`[dig] Running ${queries.length} search(es) in parallel...\n`);
 
     // allSettled semantics (IMP-002): each task self-handles its own failure
@@ -2010,6 +2056,63 @@ async function dig() {
     );
   }
 }
+
+// ─── DEPTH safety valve: SIGINT/SIGTERM escape hatch (FR-3) ──────
+// A wrong question is discovered after 2 minutes, not 25 — abort-with-partial
+// is a first-class outcome, not a crash.
+
+// The partial artifact (SDD §4.3). synthesis is ALWAYS null — synthesize() is
+// one atomic call, there is no "partial synthesis" (IMP-008).
+function buildPartialArtifact(): Record<string, unknown> {
+  const ok = accumulator.filter(
+    (s): s is Extract<SettledSearch, { status: "ok" }> => s.status === "ok"
+  );
+  const failed = accumulator.filter((s) => s.status === "error");
+  const sources = [
+    ...new Map(
+      ok.flatMap((s) => s.result.sources).map((x) => [x.uri, x])
+    ).values(),
+  ].filter((s) => s.uri.startsWith("http"));
+  return {
+    partial: true,
+    query: QUERY,
+    completed_searches: ok.length,
+    failed_searches: failed.length,
+    total_searches: totalPlannedSearches || accumulator.length,
+    sources: sources.map((s) => ({ title: s.title, url: s.uri })),
+    synthesis: null,
+    reason: "aborted with partial results",
+  };
+}
+
+let aborting = false;
+function onSignal(sig: "SIGINT" | "SIGTERM"): () => void {
+  return () => {
+    if (aborting) return; // double-signal guard
+    aborting = true;
+    abortController.abort(); // IMP-003: cancel in-flight fetches
+    for (const c of activeChildren) {
+      try { c.kill("SIGTERM"); } catch { /* already gone */ }
+    }
+    const partial = buildPartialArtifact();
+    if (TRAIL_PATH) {
+      try {
+        const date = new Date().toISOString().split("T")[0];
+        appendFileSync(
+          resolveTrailPath(date),
+          `\n## Dig (ABORTED): ${QUERY}\n_${new Date().toISOString()} | ` +
+          `${partial.completed_searches}/${partial.total_searches} searches | ${sig}_\n\n---\n\n`
+        );
+      } catch { /* trail append is best-effort on the abort path */ }
+    }
+    // SKP-002: process.exit does NOT flush async stdout — write SYNCHRONOUSLY
+    // to fd 1 so a large partial artifact is fully on the wire before exit.
+    writeSync(1, JSON.stringify(partial) + "\n");
+    process.exit(sig === "SIGTERM" ? 143 : 130);
+  };
+}
+process.on("SIGINT", onSignal("SIGINT"));
+process.on("SIGTERM", onSignal("SIGTERM"));
 
 // Entry point: --scout routes to the breadth primitive, else the deep dig.
 const entry = SCOUT ? scout : dig;

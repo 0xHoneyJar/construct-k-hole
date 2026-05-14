@@ -10,10 +10,10 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { spawnSync, spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -23,6 +23,37 @@ const FIX = join(HERE, "fixtures");
 /** A throwaway temp dir for trail-file / state-dump side effects. */
 function tmp(): string {
   return mkdtempSync(join(tmpdir(), "dig-test-"));
+}
+
+/**
+ * Run dig-search.ts as an interruptible subprocess. Spawns `node --import tsx`
+ * directly (not `npx`) so the signal reaches the dig process, not a wrapper.
+ * Sends `signal` after `signalAfterMs`; optionally a second signal (for the
+ * double-signal guard test).
+ */
+function runDigInterruptible(
+  args: string[],
+  env: Record<string, string>,
+  opts: { signalAfterMs: number; signal: NodeJS.Signals; secondSignalAfterMs?: number }
+): Promise<{ status: number | null; signal: string | null; stdout: string; stderr: string }> {
+  return new Promise((resolveP) => {
+    const child = spawn("node", ["--import", "tsx", SCRIPT, ...args], {
+      env: { ...process.env, ...env },
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (d) => (stdout += d));
+    child.stderr.on("data", (d) => (stderr += d));
+    setTimeout(() => {
+      try { child.kill(opts.signal); } catch { /* already gone */ }
+    }, opts.signalAfterMs);
+    if (opts.secondSignalAfterMs != null) {
+      setTimeout(() => {
+        try { child.kill(opts.signal); } catch { /* already gone */ }
+      }, opts.secondSignalAfterMs);
+    }
+    child.on("close", (status, signal) => resolveP({ status, signal, stdout, stderr }));
+  });
 }
 
 /** Run dig-search.ts as a subprocess. Returns { status, stdout, stderr }. */
@@ -356,5 +387,117 @@ test("S5/Scenario 13 — emit→consume loop: dig A's threads_to_pull seed dig B
   } finally {
     rmSync(dirA, { recursive: true, force: true });
     rmSync(dirB, { recursive: true, force: true });
+  }
+});
+
+// ── Scenario 7 — SIGINT before synthesis: partial artifact, exit 130 ──
+test("S6/Scenario 7 — SIGINT mid-flight flushes a partial artifact, exit 130", async () => {
+  const dir = tmp();
+  try {
+    // deep-slow: search 1 completes at ~150ms, search 2 hangs 9s. SIGINT at
+    // 1500ms → search 1 in the accumulator, search 2 in-flight.
+    const r = await runDigInterruptible(
+      ["--query", "creative tooling", "--depth", "2", "--trail", join(dir, "trail.md")],
+      { DIG_MOCK_PROVIDER: join(FIX, "deep-slow.json") },
+      { signalAfterMs: 1500, signal: "SIGINT" }
+    );
+    assert.equal(r.status, 130, "exit code is 130 (POSIX SIGINT) — automation-detectable");
+    const partial = JSON.parse(r.stdout.trim()); // AC6.5: complete, not truncated
+    assert.equal(partial.partial, true);
+    assert.equal(partial.synthesis, null, "atomic synthesis — never half-rendered (IMP-008)");
+    assert.equal(
+      partial.completed_searches,
+      1,
+      "completed_searches reflects the search that finished — NOT 0 (SKP-001a)"
+    );
+    assert.equal(partial.total_searches, 2);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// ── Scenario 8 — SIGINT during synthesis: same shape, synthesis null ──
+test("S6/Scenario 8 — SIGINT during synthesis still flushes a clean partial", async () => {
+  const dir = tmp();
+  try {
+    // deep-slow-synth: both searches finish at ~150ms, synthesis hangs 9s.
+    // SIGINT at 1500ms → both searches accumulated, synthesis in-flight.
+    const r = await runDigInterruptible(
+      ["--query", "creative tooling", "--depth", "2", "--trail", join(dir, "trail.md")],
+      { DIG_MOCK_PROVIDER: join(FIX, "deep-slow-synth.json") },
+      { signalAfterMs: 1500, signal: "SIGINT" }
+    );
+    assert.equal(r.status, 130);
+    const partial = JSON.parse(r.stdout.trim());
+    assert.equal(partial.partial, true);
+    assert.equal(partial.completed_searches, 2, "both searches completed before synthesis");
+    assert.equal(partial.synthesis, null, "in-flight synthesis abandoned, never half-rendered");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// ── AC6.3 — double-signal guard: second signal ignored ──
+test("S6/AC6.3 — a second signal during flush is ignored (no double-flush)", async () => {
+  const dir = tmp();
+  try {
+    const r = await runDigInterruptible(
+      ["--query", "creative tooling", "--depth", "2", "--trail", join(dir, "trail.md")],
+      { DIG_MOCK_PROVIDER: join(FIX, "deep-slow.json") },
+      { signalAfterMs: 1500, signal: "SIGINT", secondSignalAfterMs: 1550 }
+    );
+    assert.equal(r.status, 130);
+    // Exactly ONE partial artifact on stdout — the `aborting` guard held.
+    const lines = r.stdout.trim().split("\n").filter(Boolean);
+    assert.equal(lines.length, 1, "exactly one partial artifact — double-flush guarded");
+    assert.equal(JSON.parse(lines[0]).partial, true);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// ── AC6.4 — SIGTERM exits 143 ──
+test("S6/AC6.4 — SIGTERM flushes a partial artifact and exits 143", async () => {
+  const dir = tmp();
+  try {
+    const r = await runDigInterruptible(
+      ["--query", "creative tooling", "--depth", "2", "--trail", join(dir, "trail.md")],
+      { DIG_MOCK_PROVIDER: join(FIX, "deep-slow.json") },
+      { signalAfterMs: 1500, signal: "SIGTERM" }
+    );
+    assert.equal(r.status, 143, "SIGTERM → 128+15 = 143 (orchestrators send SIGTERM — IMP-013)");
+    assert.equal(JSON.parse(r.stdout.trim()).partial, true);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// ── Scenario 15 / AC6.6 — subprocess reaping at the spawn seam (SKP-001b) ──
+test("S6/Scenario 15 — SIGINT reaps spawn'd CLI children (no orphans)", async () => {
+  const dir = tmp();
+  const killedMarker = join(dir, "cli-killed");
+  try {
+    // DIG_CLI_BIN points geminiCliCall's spawn at a fake CLI that sleeps and,
+    // on SIGTERM, touches the marker. No DIG_MOCK_PROVIDER → the dig actually
+    // reaches geminiCliCall's spawn (the seam the gemini()-mock cannot reach).
+    const r = await runDigInterruptible(
+      ["--query", "creative tooling", "--depth", "2", "--trail", join(dir, "trail.md")],
+      {
+        DIG_CLI_BIN: join(FIX, "fake-gemini-cli.sh"),
+        DIG_CLI_KILLED_MARKER: killedMarker,
+        DIG_MOCK_PROVIDER: "", // explicitly empty — force the real spawn path
+        DIG_CLI_TIMEOUT_MS: "60000",
+      },
+      { signalAfterMs: 2500, signal: "SIGINT" }
+    );
+    assert.equal(r.status, 130, "dig exits 130 even when mid-spawn");
+    assert.equal(JSON.parse(r.stdout.trim()).partial, true);
+    // The reaper killed the spawn'd child → its SIGTERM trap touched the marker.
+    assert.ok(
+      existsSync(killedMarker),
+      "activeChildren reaper sent SIGTERM to the spawn'd CLI child — no orphan"
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
   }
 });
