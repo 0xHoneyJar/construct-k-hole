@@ -1,0 +1,65 @@
+{
+  "schema_version": "0.1.0",
+  "envelope_id": "sky-children-of-the-light",
+  "ref": {
+    "name": "Sky: Children of the Light",
+    "type": "game",
+    "studio": "thatgamecompany",
+    "year": 2019,
+    "url": "https://www.thatskygame.com/"
+  },
+  "direction": {
+    "name": "populated-diorama-world-feel",
+    "project": "compass",
+    "cycle": "C2"
+  },
+  "resonance": {
+    "strength": 0.92,
+    "evidence": [
+      "1:3 head-to-body chibi proportion is the cited social-readability standard for stylized 3D",
+      "wandering-spirit ambient choreography: NPCs you encounter and move past, never control",
+      "locked-camera-per-area enables high apparent population density without traversal cost"
+    ]
+  },
+  "why": {
+    "philosophical": "Connection without combat — characters read as social presence, not threat. The world is inhabited, not contested.",
+    "aesthetic": "Soft NPR, light-shaft-heavy atmosphere, flowing silhouettes; stylized but warm rather than clinical.",
+    "design": "Each area is a stage you inhabit and move through, not a level you clear — the camera frames, it does not follow a fight."
+  },
+  "composes_with": [
+    { "envelope_ref": "cult-of-the-lamb", "on": "follower-NPC ambient choreography pattern", "strength": 0.85 },
+    { "envelope_ref": "theatrical-performance-architecture", "on": "locked-camera-per-area as the population-density lever", "strength": 0.9 }
+  ],
+  "contradicts_with": [
+    { "envelope_ref": "genshin-impact", "on": "realistic 1:7 proportion vs committed chibi 1:3" }
+  ],
+  "bounds_set": {
+    "locks_in": [
+      "stylized NPR aesthetic family",
+      "chibi proportion commitment (~1:3, not realistic)",
+      "locked-camera Theatrical Performance architecture"
+    ],
+    "locks_out": [
+      "combat-driven action loop (Sky has none by design)",
+      "realistic PBR rendering",
+      "deep avatar-customization RPG mechanics"
+    ]
+  },
+  "extrapolates_to": [
+    "wandering NPCs with mood-states tied to player ritual moments",
+    "group choreography forming around Sora Tower during sequence beats",
+    "light-shaft volumetrics driven by element activation"
+  ],
+  "threads_to_pull": [
+    "thatgamecompany Sky spirit-flock-following choreography mechanic",
+    "Sky 'ascension' moment as a ritual-sequence reference",
+    "thatgamecompany Journey (2012) predecessor wandering-NPC encounter design"
+  ],
+  "provenance": {
+    "surfaced_by": "dig-session-2026-05-14 (stylized-3D-chibi-pipelines)",
+    "ratified_by": "soju",
+    "ratified_at": "2026-05-13",
+    "candidate": false
+  },
+  "tags": ["chibi", "choreography", "camera", "substrate-coupling", "npr"]
+}

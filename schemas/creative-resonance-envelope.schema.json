@@ -1,0 +1,253 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://0xhoneyjar.dev/k-hole/schemas/creative-resonance-envelope.schema.json",
+  "x-canonical-source": "0xHoneyJar/construct-k-hole",
+  "title": "Creative-Resonance Envelope",
+  "description": "K-hole construct's structured output for design-reference resonance. Where a dig produces synthesis prose, an envelope produces queryable REASONING: WHY a creative reference grounds a chosen direction, HOW it composes with or contradicts other references, WHAT adjacent threads it extrapolates toward, and WHICH bounds it sets. Envelopes link by envelope_id into a navigable web of cited creative reasoning. NATIVE-STYLED, NOT UPSTREAM-OWNED: this schema lives in construct-k-hole (our domain). It is intentionally designed in the JSON-Schema-2020-12 convention of loa-hounfour (the Loa schema protocol library) and aligned with the WHY-envelope philosophy of construct-rooms-substrate (required WHY + cross-validation signals + three-tier required/recommended/optional fields) so that a produced envelope CAN ride as the verdict payload of a rooms-substrate construct-handoff packet (output_type: Artifact) without any change to those upstream repos. loa-hounfour and construct-rooms-substrate are REFERENCED CONVENTIONS, not dependencies — if either upstream team chooses to adopt this schema natively, the promotion path is documented in the K-hole pack docs; until then it is ours. Kaironic by design: minimal at v0.1 — fields are added when a real envelope needs them, not speculatively.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "envelope_id",
+    "ref",
+    "direction",
+    "resonance",
+    "why",
+    "provenance"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$",
+      "description": "Semver of the envelope schema. v0.1.0 = initial. Breaking field changes bump major; additive fields bump minor. Required tier."
+    },
+    "envelope_id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9_-]*$",
+      "minLength": 1,
+      "maxLength": 80,
+      "description": "Stable kebab-case slug. Other envelopes reference this id in composes_with / contradicts_with. Unique within an envelope set. Required tier."
+    },
+    "ref": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "type"],
+      "description": "The reference being enveloped. Required tier.",
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "description": "The reference itself — a game, studio, person, technique, artifact, concept, or doctrine."
+        },
+        "type": {
+          "enum": ["game", "studio", "person", "technique", "artifact", "concept", "doctrine"],
+          "description": "What KIND of reference. game/studio/person are source references; technique/artifact are method references; concept/doctrine are framing references."
+        },
+        "studio": {
+          "type": "string",
+          "maxLength": 120,
+          "description": "Optional — the studio/maker, if type is game or artifact."
+        },
+        "year": {
+          "type": "integer",
+          "description": "Optional — release/origin year."
+        },
+        "url": {
+          "type": "string",
+          "maxLength": 1024,
+          "description": "Optional — canonical URL (store page, GDC talk, breakdown article)."
+        }
+      }
+    },
+    "direction": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name"],
+      "description": "The direction this envelope grounds. Required tier.",
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120,
+          "description": "The creative direction this envelope grounds (e.g., 'populated-diorama-world-feel'). Multiple envelopes share a direction name; together they ARE the grounded definition of that direction."
+        },
+        "project": {
+          "type": "string",
+          "maxLength": 80,
+          "description": "Optional project namespace (e.g., 'compass')."
+        },
+        "cycle": {
+          "type": "string",
+          "maxLength": 40,
+          "description": "Optional cycle scope (e.g., 'C2')."
+        }
+      }
+    },
+    "resonance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["strength", "evidence"],
+      "description": "Strength + evidence. Required tier.",
+      "properties": {
+        "strength": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "description": "How strongly this reference grounds the direction. 0 = name-dropped, no real fit. 0.4-0.6 = partial/contested. 0.85-1.0 = foundational. A reference can be on the board with LOW strength — that is signal too: it tells the agent NOT to over-weight it. The calibratable cross-validation signal (cf. construct-rooms-substrate why.confidence)."
+        },
+        "evidence": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 32,
+          "items": { "type": "string", "minLength": 1, "maxLength": 600 },
+          "description": "Concrete, checkable reasons for the strength score. Each item should be verifiable, not vibes."
+        }
+      }
+    },
+    "why": {
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "description": "The why-reasoning across three lenses. At least one lens must be populated (minProperties: 1), each >=32 chars (mirrors construct-rooms-substrate why.rationale discipline). This is the load-bearing field — the EXACT WHY that lets an agent extrapolate the direction deeper. Required tier.",
+      "properties": {
+        "philosophical": {
+          "type": "string",
+          "minLength": 32,
+          "maxLength": 1200,
+          "description": "Why this resonates at the level of values / stance / what-the-work-is-about."
+        },
+        "aesthetic": {
+          "type": "string",
+          "minLength": 32,
+          "maxLength": 1200,
+          "description": "Why this resonates at the level of look / feel / sensory surface."
+        },
+        "design": {
+          "type": "string",
+          "minLength": 32,
+          "maxLength": 1200,
+          "description": "Why this resonates at the level of systems / mechanics / how-it-plays."
+        }
+      }
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["surfaced_by", "ratified_at"],
+      "description": "Where this envelope came from and whether it is ratified. Required tier.",
+      "properties": {
+        "surfaced_by": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "description": "Where the evidence came from — a dig session id, a conversation date, a doctrine page path."
+        },
+        "ratified_by": {
+          "type": "string",
+          "maxLength": 80,
+          "description": "Operator handle who confirmed the resonance. Absent = candidate."
+        },
+        "ratified_at": {
+          "type": "string",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
+          "description": "ISO date (YYYY-MM-DD) the envelope was authored or ratified."
+        },
+        "candidate": {
+          "type": "boolean",
+          "description": "true = surfaced but not operator-ratified (reasoning is the agent's hypothesis). false = operator-ratified (reasoning is confirmed direction). Defaults true when absent."
+        }
+      }
+    },
+    "composes_with": {
+      "type": "array",
+      "maxItems": 64,
+      "description": "Other envelopes this one strengthens or combines with. This is what makes the set a WEB rather than a list. Recommended tier.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["envelope_ref", "on", "strength"],
+        "properties": {
+          "envelope_ref": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9_-]*$",
+            "maxLength": 80,
+            "description": "envelope_id of the composing envelope. May reference an envelope not yet authored — a forward link marks it as worth writing."
+          },
+          "on": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 240,
+            "description": "The axis on which they compose (e.g., 'follower-NPC choreography pattern')."
+          },
+          "strength": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1,
+            "description": "How strongly they compose on that axis."
+          }
+        }
+      }
+    },
+    "contradicts_with": {
+      "type": "array",
+      "maxItems": 64,
+      "description": "Other envelopes this one is in tension with. Contradiction is not disqualifying — it marks a boundary the operator must consciously navigate. Functions as the counterfactual cross-validation signal (cf. construct-rooms-substrate why.alternative_verdicts). Recommended tier.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["envelope_ref", "on"],
+        "properties": {
+          "envelope_ref": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9_-]*$",
+            "maxLength": 80
+          },
+          "on": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 240,
+            "description": "The axis of tension (e.g., 'realistic-vs-chibi proportion commitment')."
+          }
+        }
+      }
+    },
+    "bounds_set": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "What this reference, if adopted, locks in and locks out — the 'fences' set up when a direction resonates. Recommended tier.",
+      "properties": {
+        "locks_in": {
+          "type": "array",
+          "maxItems": 32,
+          "items": { "type": "string", "minLength": 1, "maxLength": 240 },
+          "description": "Commitments this reference makes canonical if adopted."
+        },
+        "locks_out": {
+          "type": "array",
+          "maxItems": 32,
+          "items": { "type": "string", "minLength": 1, "maxLength": 240 },
+          "description": "Possibilities this reference forecloses if adopted."
+        }
+      }
+    },
+    "extrapolates_to": {
+      "type": "array",
+      "maxItems": 32,
+      "items": { "type": "string", "minLength": 1, "maxLength": 300 },
+      "description": "Adjacent directions/features this envelope's reasoning points toward. An agent activating this envelope may pursue any of these as a natural extension. Optional tier."
+    },
+    "threads_to_pull": {
+      "type": "array",
+      "maxItems": 32,
+      "items": { "type": "string", "minLength": 1, "maxLength": 300 },
+      "description": "Specific named threads (sub-references, GDC talks, techniques) to dig deeper on if this envelope is activated for a Room. The next dig's queries come from here. Optional tier."
+    },
+    "tags": {
+      "type": "array",
+      "maxItems": 32,
+      "items": { "type": "string", "minLength": 1, "maxLength": 40 },
+      "description": "Free-form tags for cross-cutting queries (e.g., 'camera', 'chibi', 'substrate-coupling'). Optional tier."
+    }
+  }
+}
