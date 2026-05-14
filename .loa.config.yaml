@@ -1,0 +1,20 @@
+# Loa Framework Configuration — construct-k-hole
+persistence_mode: standard
+integrity_enforcement: strict
+drift_resolution: code
+disabled_agents: []
+memory:
+  notes_file: grimoires/loa/NOTES.md
+  trajectory_dir: grimoires/loa/a2a/trajectory
+  trajectory_retention_days: 30
+  auto_restore: true
+edd:
+  enabled: true
+  min_test_scenarios: 3
+  trajectory_audit: true
+  require_citations: true
+compaction:
+  enabled: true
+  threshold: 5
+integrations:
+  - github
