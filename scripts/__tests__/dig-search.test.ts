@@ -259,3 +259,102 @@ test("S4/AC4.3 — missing --envelopes path is a note, not a crash", () => {
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// ── Scenario 11 — envelope emission with --trail ──
+test("S5/Scenario 11 — deep dig with --trail emits a valid candidate envelope", () => {
+  const dir = tmp();
+  try {
+    const { status, stdout } = runDig(
+      ["--query", "creative tooling", "--depth", "2", "--trail", join(dir, "trail.md")],
+      { DIG_MOCK_PROVIDER: join(FIX, "deep-ok.json") }
+    );
+    assert.equal(status, 0);
+    const out = JSON.parse(stdout);
+    assert.ok(out.emitted_envelope, "output carries the emitted_envelope path");
+    const env = JSON.parse(readFileSync(out.emitted_envelope, "utf-8"));
+    // schema-required keys + key constraints (AC5.1)
+    for (const k of ["schema_version", "envelope_id", "ref", "direction", "resonance", "why", "provenance"]) {
+      assert.ok(k in env, `envelope has required key ${k}`);
+    }
+    assert.equal(env.provenance.candidate, true, "emitted envelopes are candidates");
+    assert.match(env.envelope_id, /^[a-z0-9][a-z0-9_-]*$/);
+    // AC5.5 — resonance.strength is a number in [0,1] (depthRatingToStrength)
+    assert.equal(typeof env.resonance.strength, "number");
+    assert.ok(env.resonance.strength >= 0 && env.resonance.strength <= 1);
+    assert.ok(Array.isArray(env.resonance.evidence) && env.resonance.evidence.length >= 1);
+    // threads_to_pull carried from the synthesis (the loop's payload)
+    assert.ok(Array.isArray(env.threads_to_pull) && env.threads_to_pull.length >= 1);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// ── Scenario 12 — no --trail → no emission ──
+test("S5/Scenario 12 — no --trail means no envelope file, emitted_envelope:null", () => {
+  const dir = tmp();
+  try {
+    const { status, stdout, stderr } = runDig(
+      ["--query", "creative tooling", "--depth", "2"],
+      { DIG_MOCK_PROVIDER: join(FIX, "deep-ok.json") }
+    );
+    assert.equal(status, 0);
+    const out = JSON.parse(stdout);
+    assert.equal(out.emitted_envelope, null);
+    assert.match(stderr, /envelope emission skipped/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// ── AC5.3 — --no-emit-envelope opts out even with --trail ──
+test("S5/AC5.3 — --no-emit-envelope suppresses emission even with --trail", () => {
+  const dir = tmp();
+  try {
+    const { status, stdout } = runDig(
+      ["--query", "creative tooling", "--depth", "2", "--trail", join(dir, "trail.md"), "--no-emit-envelope"],
+      { DIG_MOCK_PROVIDER: join(FIX, "deep-ok.json") }
+    );
+    assert.equal(status, 0);
+    assert.equal(JSON.parse(stdout).emitted_envelope, null);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// ── Scenario 13 — the e2e loop: dig A emits → dig B consumes A's threads ──
+test("S5/Scenario 13 — emit→consume loop: dig A's threads_to_pull seed dig B", () => {
+  const dirA = tmp();
+  const dirB = tmp();
+  const stateB = join(dirB, "state.json");
+  try {
+    // dig A — emits an envelope with threads_to_pull from its synthesis.
+    const a = runDig(
+      ["--query", "creative tooling", "--depth", "2", "--trail", join(dirA, "trail.md")],
+      { DIG_MOCK_PROVIDER: join(FIX, "deep-ok.json") }
+    );
+    assert.equal(a.status, 0);
+    const envPathA = JSON.parse(a.stdout).emitted_envelope;
+    const envA = JSON.parse(readFileSync(envPathA, "utf-8"));
+    assert.ok(envA.threads_to_pull.length >= 1, "dig A produced threads to pull");
+
+    // dig B — consumes dig A's envelope; A's threads_to_pull become B's seeds.
+    const b = runDig(
+      ["--query", "a different thread", "--depth", "2", "--envelopes", envPathA, "--trail", join(dirB, "trail.md")],
+      { DIG_MOCK_PROVIDER: join(FIX, "deep-ok.json"), DIG_DUMP_STATE: stateB }
+    );
+    assert.equal(b.status, 0);
+    const state = JSON.parse(readFileSync(stateB, "utf-8"));
+    const queriesB = state.accumulator.map(
+      (s: { result?: { query: string }; query?: string }) => s.result?.query ?? s.query
+    );
+    // B's query set must include one of A's threads_to_pull — the loop closed.
+    const firstThreadA = envA.threads_to_pull[0];
+    assert.ok(
+      queriesB.some((q: string) => q === firstThreadA),
+      `dig B's queries include dig A's thread "${firstThreadA}"`
+    );
+  } finally {
+    rmSync(dirA, { recursive: true, force: true });
+    rmSync(dirB, { recursive: true, force: true });
+  }
+});

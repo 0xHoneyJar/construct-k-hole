@@ -15,13 +15,17 @@
  *   npx tsx scripts/dig-search.ts --query "your thread" --depth 3 --stream
  *   npx tsx scripts/dig-search.ts --query "your thread" --envelopes path/to/envelopes/
  *
- * PULLING-THREADS primitive — --envelopes:
- *   Point at a creative-resonance-envelope (a JSON file) or a directory of
- *   them. The activated envelopes' `threads_to_pull` become seed queries for
- *   this dig — closing the loop where one dig's surfaced threads feed the
- *   next dig's input. Seeds never crowd out the QUERY: ceil(depth/2) slots
+ * PULLING-THREADS primitive — --envelopes (consume) + auto-emit:
+ *   Point --envelopes at a creative-resonance-envelope (a JSON file) or a
+ *   directory of them. The activated envelopes' `threads_to_pull` become seed
+ *   queries for this dig. Seeds never crowd out the QUERY: ceil(depth/2) slots
  *   are always reserved for query-derived searches. At --depth 1 the single
  *   slot goes to the QUERY and seeds are ignored with a note.
+ *   Emit side: every deep dig with a --trail auto-emits a candidate
+ *   creative-resonance-envelope (its `threads_to_pull` = this dig's pull
+ *   threads) next to the trail, at <trail-dir>/envelopes/<envelope_id>.json —
+ *   so the next dig can --envelopes it. The loop closes. --no-emit-envelope
+ *   opts out; no --trail means no emission (envelopes are loop artifacts).
  *
  * DEPTH visibility — --stream:
  *   Turns stdout into NDJSON — one `search` (or `search_error`) event per
@@ -60,6 +64,7 @@ import { join, dirname, resolve, relative } from "path";
 import { fileURLToPath } from "url";
 import { spawn, spawnSync } from "child_process";
 import { tmpdir } from "os";
+import { createHash } from "crypto";
 
 // ─── Config ─────────────────────────────────────────────────────
 
@@ -243,6 +248,11 @@ function emitEvent(evt: Record<string, unknown>): void {
 // queries for this dig — closing the loop where one dig's surfaced threads
 // feed the next dig's input. Seeds never crowd out the QUERY (planSearchQueries).
 const ENVELOPES_PATH = getArg("envelopes");
+
+// FR-5: every non-scout dig with a --trail auto-emits a candidate
+// creative-resonance-envelope capturing what it surfaced (so the next dig can
+// consume its threads_to_pull). --no-emit-envelope opts out.
+const NO_EMIT_ENVELOPE = getFlag("no-emit-envelope");
 // Default: gemini-3-pro-preview (the gemini CLI resolves this to
 // gemini-3.1-pro-preview server-side — the current latest, per
 // https://deepmind.google/models/gemini/pro/). Pro-tier is required for
@@ -1434,6 +1444,172 @@ function planSearchQueries(
   return [...usedSeeds, ...queryDerived];
 }
 
+// ─── Envelope emission (PULLING-THREADS emit + RESONANCE · FR-5) ──
+
+// RESONANCE primitive's quantitative anchor: map rateDepth()'s symbol scale
+// (−/±/+/++/+++) to a 0–1 resonance.strength. Explicit table, pure lookup
+// (IMP-009). NOTE: this corrects SDD §FR-5.1, which named the Shulgin words
+// surface/notable/deep/profound — rateDepth() actually returns these symbols.
+function depthRatingToStrength(rating: string): number {
+  const table: Record<string, number> = {
+    "−": 0.3, // −   score 0
+    "±": 0.45, // ±  score 1
+    "+": 0.6, //          score 2
+    "++": 0.8, //         score 3
+    "+++": 0.95, //       score 4
+  };
+  if (rating in table) return table[rating];
+  process.stderr.write(`[dig] depthRatingToStrength: unknown rating "${rating}" — defaulting to 0.30\n`);
+  return 0.3;
+}
+
+// kebab-case slug, guaranteed to start [a-z0-9] and be non-empty (the schema's
+// envelope_id / direction.name patterns require it).
+function slugify(s: string, maxLen = 70): string {
+  const slug = s
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, maxLen)
+    .replace(/-+$/g, "");
+  return slug || "dig";
+}
+
+type EmittedEnvelope = {
+  schema_version: string;
+  envelope_id: string;
+  ref: { name: string; type: string };
+  direction: { name: string };
+  resonance: { strength: number; evidence: string[] };
+  why: { design: string };
+  provenance: { surfaced_by: string; ratified_at: string; candidate: boolean };
+  threads_to_pull: string[];
+};
+
+// Construct a schema-valid candidate envelope from a completed dig (SDD §FR-5.1).
+// threads_to_pull = parsed.pull_threads — THIS is the loop-closing mapping:
+// this dig's pull-threads become the next dig's FR-4 seed queries.
+function buildEmittedEnvelope(
+  query: string,
+  parsed: { findings: string; pull_threads: string[]; emergence: string | null },
+  depthRating: string,
+  sourceCount: number,
+  synthesis: string,
+  trailFile: string
+): EmittedEnvelope {
+  const slug = slugify(query);
+  const idHash = createHash("sha256").update(query).digest("hex").slice(0, 8);
+  const envelope_id = `${slug}-${idHash}`.slice(0, 80);
+
+  // resonance.evidence — schema requires ≥1 concrete item. Derive from the
+  // findings bullets; fall back to a source-count statement if findings is bare.
+  const evidence = parsed.findings
+    .split("\n")
+    .map((l) => l.replace(/^[-*]\s*/, "").replace(/\*\*/g, "").trim())
+    .filter((l) => l.length > 0)
+    .map((l) => l.slice(0, 600))
+    .slice(0, 32);
+  if (evidence.length === 0) {
+    evidence.push(`Dig surfaced ${sourceCount} source(s) for: ${query}`.slice(0, 600));
+  }
+
+  // why.design — schema requires ≥32 chars. First synthesis paragraph, or a
+  // grounded fallback sentence.
+  const firstPara = (synthesis.split(/\n\n+/)[0] || "").trim().slice(0, 1200);
+  const designWhy =
+    firstPara.length >= 32
+      ? firstPara
+      : `Dig on "${query}" surfaced ${sourceCount} sources at ${depthRating} depth — synthesis grounded the direction.`;
+
+  return {
+    schema_version: inRepoSchemaVersion(),
+    envelope_id,
+    ref: { name: query.slice(0, 200), type: "concept" },
+    direction: { name: slug.slice(0, 120) },
+    resonance: {
+      strength: depthRatingToStrength(depthRating),
+      evidence,
+    },
+    why: { design: designWhy.slice(0, 1200) },
+    provenance: {
+      surfaced_by: trailFile,
+      ratified_at: new Date().toISOString().split("T")[0],
+      candidate: true,
+    },
+    threads_to_pull: parsed.pull_threads.map((t) => t.slice(0, 300)).slice(0, 32),
+  };
+}
+
+// Structural validation of a constructed envelope (SDD §FR-5.3). Not a full
+// JSON-Schema pass (NFR-1: no new runtime dep) — checks the required keys and
+// the cheap constraints that catch a construction bug. Returns problems (empty
+// = ok).
+function validateEnvelopeStructure(env: EmittedEnvelope): string[] {
+  const problems: string[] = [];
+  for (const k of ["schema_version", "envelope_id", "ref", "direction", "resonance", "why", "provenance"]) {
+    if (!(k in env)) problems.push(`missing required key: ${k}`);
+  }
+  if (!/^\d+\.\d+\.\d+$/.test(env.schema_version)) problems.push("schema_version not semver");
+  if (!/^[a-z0-9][a-z0-9_-]*$/.test(env.envelope_id)) problems.push("envelope_id fails pattern");
+  if (env.envelope_id.length > 80) problems.push("envelope_id too long");
+  if (!env.ref?.name || !env.ref?.type) problems.push("ref.name/type missing");
+  if (!env.direction?.name) problems.push("direction.name missing");
+  if (typeof env.resonance?.strength !== "number" || env.resonance.strength < 0 || env.resonance.strength > 1)
+    problems.push("resonance.strength out of [0,1]");
+  if (!Array.isArray(env.resonance?.evidence) || env.resonance.evidence.length < 1)
+    problems.push("resonance.evidence must be a non-empty array");
+  const lenses = ["philosophical", "aesthetic", "design"] as const;
+  const populated = lenses.filter((l) => typeof (env.why as Record<string, unknown>)?.[l] === "string");
+  if (populated.length < 1) problems.push("why must have ≥1 lens");
+  for (const l of populated) {
+    if (((env.why as Record<string, string>)[l] || "").length < 32)
+      problems.push(`why.${l} shorter than 32 chars`);
+  }
+  if (!env.provenance?.surfaced_by) problems.push("provenance.surfaced_by missing");
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(env.provenance?.ratified_at || ""))
+    problems.push("provenance.ratified_at not ISO date");
+  return problems;
+}
+
+// Build + validate + write a candidate envelope. Returns the written path, or
+// null when emission is skipped (no --trail, --no-emit-envelope) or when a
+// construction bug fails structural validation (warn + skip — never crash the
+// dig over emission). Path is deterministic from envelope_id (re-runs overwrite).
+function emitEnvelope(
+  query: string,
+  parsed: { findings: string; pull_threads: string[]; emergence: string | null },
+  depthRating: string,
+  sourceCount: number,
+  synthesis: string,
+  trailFile: string
+): string | null {
+  if (NO_EMIT_ENVELOPE) return null;
+  if (!TRAIL_PATH) {
+    process.stderr.write(
+      `[dig] envelope emission skipped — no --trail (envelopes are loop artifacts; the trail is the loop's home).\n`
+    );
+    return null;
+  }
+
+  const envelope = buildEmittedEnvelope(query, parsed, depthRating, sourceCount, synthesis, trailFile);
+  const problems = validateEnvelopeStructure(envelope);
+  if (problems.length > 0) {
+    process.stderr.write(
+      `[dig] envelope emission skipped — constructed envelope failed validation: ${problems.join("; ")}\n`
+    );
+    return null;
+  }
+
+  // Envelopes live next to where the operator pointed --trail.
+  const trailDir = dirname(resolve(process.cwd(), TRAIL_PATH));
+  const envDir = join(trailDir, "envelopes");
+  mkdirSync(envDir, { recursive: true });
+  const envPath = join(envDir, `${envelope.envelope_id}.json`);
+  writeFileSync(envPath, JSON.stringify(envelope, null, 2));
+  process.stderr.write(`[dig] Emitted candidate envelope: ${envPath}\n`);
+  return envPath;
+}
+
 // ─── Synthesis ───────────────────────────────────────────────────
 
 async function synthesize(
@@ -1778,6 +1954,17 @@ async function dig() {
 
   appendFileSync(trailFile, trailEntry);
 
+  // FR-5: emit a candidate creative-resonance-envelope — this dig's
+  // pull_threads become the next dig's --envelopes seeds (the loop closes).
+  const emittedEnvelope = emitEnvelope(
+    QUERY!,
+    parsed,
+    depthRating,
+    uniqueSources.length,
+    synthesis,
+    trailFile
+  );
+
   // Collect all web search queries Gemini actually executed
   const allWebSearchQueries = [...new Set(searches.flatMap((s) => s.webSearchQueries))];
   if (allWebSearchQueries.length) {
@@ -1803,6 +1990,7 @@ async function dig() {
     had_resonance: !!resonance,
     had_trail: !!trail,
     trail_file: trailFile,
+    emitted_envelope: emittedEnvelope,
   };
 
   // FR-2: --stream → the final result is the terminal `complete` NDJSON event
