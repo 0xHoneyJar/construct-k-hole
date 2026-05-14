@@ -9,6 +9,7 @@ scripts/research-output/
 __pycache__/
 *.pyc
 grimoires/loa/a2a/
+grimoires/k-hole/
 .claude/constructs/
 .claude/overrides/
 

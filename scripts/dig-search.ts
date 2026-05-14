@@ -280,13 +280,6 @@ const abortController = new AbortController();
 const activeChildren = new Set<ChildProcess>();
 let totalPlannedSearches = 0;
 
-// Test-only observability hook (SDD §6 / IMP-014). The subprocess suite reads
-// the accumulator via the DIG_DUMP_STATE env seam; this export is for the
-// in-process unit tests that S8's dig-lib.ts extraction will enable.
-export function __getAccumulator(): SettledSearch[] {
-  return accumulator;
-}
-
 // FR-2: structured stream event — one NDJSON line on stdout.
 function emitEvent(evt: Record<string, unknown>): void {
   process.stdout.write(JSON.stringify(evt) + "\n");
