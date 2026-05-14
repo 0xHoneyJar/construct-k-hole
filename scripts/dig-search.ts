@@ -175,6 +175,35 @@ function getFlag(name: string): boolean {
   return process.argv.includes(`--${name}`);
 }
 
+// ─── Single entry point: --print-contract / --help (S7) ──────────
+// dig-search.ts is THE entry point — the four primitives are flags on it.
+// --print-contract emits the published surface contract for agent self-
+// discovery; --help is the human-readable summary. Both handled before
+// --query is required.
+if (getFlag("print-contract")) {
+  process.stdout.write(
+    readFileSync(join(REPO_ROOT, "schemas", "dig-surface.schema.json"), "utf-8")
+  );
+  process.exit(0);
+}
+if (getFlag("help")) {
+  process.stdout.write(
+    `dig-search — the K-hole construct's one entry point. Four primitives:\n\n` +
+    `  BREADTH         --scout            one fast shallow pass (no synthesis)\n` +
+    `  DEPTH           --depth <0-4>      N search angles deep   (default 2)\n` +
+    `                  --stream          progressive NDJSON output\n` +
+    `                  SIGINT/SIGTERM    abort-with-partial, exit 130/143\n` +
+    `  PULLING-THREADS --envelopes <p>    seed queries from envelopes' threads_to_pull\n` +
+    `                  --no-emit-envelope opt out of auto-emit (default: emit on --trail)\n` +
+    `  RESONANCE       --resonance <p>    resonance profile weighting\n\n` +
+    `  --query <thread>   (required)      --trail <p.md>   --model <name>\n` +
+    `  --print-contract   full machine-readable surface contract → stdout\n\n` +
+    `Exit: 0 ok · 1 runtime error · 2 validation error · 130 SIGINT · 143 SIGTERM\n` +
+    `Full contract: schemas/dig-surface.schema.json\n`
+  );
+  process.exit(0);
+}
+
 const QUERY = getArg("query");
 if (!QUERY) {
   console.log(

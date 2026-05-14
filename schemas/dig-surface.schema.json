@@ -1,0 +1,134 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://0xhoneyjar.dev/k-hole/schemas/dig-surface.schema.json",
+  "x-canonical-source": "0xHoneyJar/construct-k-hole",
+  "x-schema-version": "1.0.0",
+  "title": "dig-search surface contract",
+  "description": "The single published contract for driving dig-search.ts — the K-hole construct's one executable entry point. A human or an agent reads this file (or runs `dig-search.ts --print-contract`) and knows how to operate the tool with zero source-reading. The four primitives — BREADTH, DEPTH, PULLING-THREADS, RESONANCE — are expressed as flags on this one entry point; there are no sibling scripts that duplicate a primitive.",
+
+  "x-entry-point": "scripts/dig-search.ts",
+  "x-invocation": "npx tsx scripts/dig-search.ts --query \"<thread>\" [flags]",
+
+  "x-primitives": {
+    "breadth": {
+      "what": "a fast wide shallow pass — 'is this question pointed at the right space?'",
+      "driven-by": ["--scout"]
+    },
+    "depth": {
+      "what": "intentional descent into one thread, N angles deep",
+      "driven-by": ["--depth", "--stream", "SIGINT/SIGTERM"]
+    },
+    "pulling-threads": {
+      "what": "a dig's surfaced threads become the next dig's seeds — the loop",
+      "driven-by": ["--envelopes", "--no-emit-envelope", "auto-emit on --trail"]
+    },
+    "resonance": {
+      "what": "how strongly a reference/thread grounds a direction — governs which threads pull hardest",
+      "driven-by": ["--resonance", "creative-resonance-envelope.resonance{strength,evidence}"]
+    }
+  },
+
+  "type": "object",
+  "description-inputs": "CLI flags. `properties` below is the input contract. --query is the only required input.",
+  "required": ["query"],
+  "additionalProperties": false,
+  "properties": {
+    "query": {
+      "type": "string",
+      "x-flag": "--query <string>",
+      "description": "The thread to dig. Required. A phrase, finding, or question — already half-synthesized; the construct follows the pull."
+    },
+    "depth": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 4,
+      "default": 2,
+      "x-flag": "--depth <0-4>",
+      "description": "DEPTH. 1-4 search angles; depth 0 is 'Lilly's tank' (synthesis-only, no search). Mutually exclusive with --scout."
+    },
+    "scout": {
+      "type": "boolean",
+      "default": false,
+      "x-flag": "--scout",
+      "description": "BREADTH. One search, no synthesis — source list + one-line gist per source. Mutually exclusive with --depth."
+    },
+    "stream": {
+      "type": "boolean",
+      "default": false,
+      "x-flag": "--stream",
+      "description": "DEPTH visibility. stdout becomes NDJSON: one search/search_error event per completed search + a terminal `complete` event. Without it, stdout is the single JSON blob."
+    },
+    "envelopes": {
+      "type": "string",
+      "x-flag": "--envelopes <path>",
+      "description": "PULLING-THREADS (consume). A creative-resonance-envelope JSON file or a directory of them; their threads_to_pull seed the dig. Seeds never crowd out the query (ceil(depth/2) slots reserved)."
+    },
+    "no-emit-envelope": {
+      "type": "boolean",
+      "default": false,
+      "x-flag": "--no-emit-envelope",
+      "description": "PULLING-THREADS (emit). Opt out of the default: every deep dig with a --trail auto-emits a candidate creative-resonance-envelope."
+    },
+    "resonance": {
+      "type": "string",
+      "x-flag": "--resonance <path>",
+      "description": "RESONANCE. A resonance profile file — weights which connections the synthesis surfaces."
+    },
+    "trail": {
+      "type": "string",
+      "x-flag": "--trail <path.md>",
+      "description": "A dig-session trail file. Deep digs append to it; envelope emission writes to <trail-dir>/envelopes/. No --trail means no emission."
+    },
+    "model": {
+      "type": "string",
+      "x-flag": "--model <name>",
+      "description": "Override the search model (default gemini-3-pro-preview; aliases resolved)."
+    },
+    "print-contract": {
+      "type": "boolean",
+      "default": false,
+      "x-flag": "--print-contract",
+      "description": "Print this surface contract to stdout and exit 0. For agent self-discovery."
+    },
+    "help": {
+      "type": "boolean",
+      "default": false,
+      "x-flag": "--help",
+      "description": "Print a human-readable usage summary and exit 0."
+    }
+  },
+
+  "x-flag-combinations": [
+    { "flags": ["--scout", "--depth"], "rule": "mutually-exclusive", "behavior": "validation error, exit 2" },
+    { "flags": ["--scout", "--stream"], "rule": "ignored", "behavior": "--stream has no effect in scout mode (scout is one call, no progressive events); accepted, no error" },
+    { "flags": ["--scout", "--envelopes"], "rule": "ignored", "behavior": "scout does not consume seeds; --envelopes is ignored in scout mode" },
+    { "flags": ["--scout", "--trail"], "rule": "ignored", "behavior": "scout has no side effects — no trail append, no envelope emission" },
+    { "flags": ["--scout", "--no-emit-envelope"], "rule": "redundant", "behavior": "scout never emits anyway; harmless" },
+    { "flags": ["--envelopes", "--depth 1"], "rule": "ignored-with-note", "behavior": "depth 1 reserves its single slot for the query; seeds are ignored with a stderr note" },
+    { "flags": ["--no-emit-envelope", "(no --trail)"], "rule": "redundant", "behavior": "no --trail already means no emission; harmless" },
+    { "flags": ["--stream", "--envelopes", "--trail", "--depth"], "rule": "compose", "behavior": "fully compose — a streamed, envelope-seeded, trail-writing deep dig" }
+  ],
+
+  "x-output-shapes": {
+    "scout": "{ mode:'scout', query, sources:[{title,url,gist,gist_quality}], source_count, elapsed_s, note }",
+    "deep-dig (non-stream)": "single JSON blob: { query, depth_rating, findings, emergence, pull_threads, synthesis, sources, source_count, search_count, failed_searches, web_search_queries, had_resonance, had_trail, trail_file, emitted_envelope }",
+    "deep-dig (--stream)": "NDJSON: { event:'search', query_index, of, query, source_count, elapsed_ms } | { event:'search_error', query_index, of, query, error } | { event:'complete', ...<the deep-dig blob> }",
+    "partial (SIGINT/SIGTERM)": "{ partial:true, query, completed_searches, failed_searches, total_searches, sources, synthesis:null, reason }",
+    "emitted-envelope": "conforms to creative-resonance-envelope.schema.json — written to <trail-dir>/envelopes/<envelope_id>.json, provenance.candidate:true"
+  },
+
+  "x-exit-codes": {
+    "0": "success (deep dig, scout, --print-contract, or --help)",
+    "1": "runtime error (e.g. all searches failed, missing --query, no provider configured)",
+    "2": "validation error (e.g. --scout with --depth; --envelopes major-version mismatch)",
+    "130": "aborted by SIGINT — partial artifact flushed to stdout",
+    "143": "aborted by SIGTERM — partial artifact flushed to stdout"
+  },
+
+  "x-test-seams": {
+    "DIG_MOCK_PROVIDER": "path to a fixture — mocks gemini() with canned GeminiResponse data (keyed map supported; __error / __delay_ms / __synthesis / __default entries)",
+    "DIG_DUMP_STATE": "path — dumps { accumulator, failed_searches } after a run for test observability",
+    "DIG_CLI_BIN": "override the gemini CLI binary — points geminiCliCall's spawn at a test double",
+    "note": "production never sets these — they exist so the suite can exercise the full real CLI path with zero API/subscription spend"
+  }
+}

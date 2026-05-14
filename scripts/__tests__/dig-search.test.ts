@@ -501,3 +501,30 @@ test("S6/Scenario 15 — SIGINT reaps spawn'd CLI children (no orphans)", async 
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// ── S7 — --print-contract emits the surface contract ──
+test("S7 — --print-contract emits valid JSON matching the on-disk contract", () => {
+  const { status, stdout } = runDig(["--print-contract"]);
+  assert.equal(status, 0);
+  const contract = JSON.parse(stdout); // valid JSON
+  // Matches the file byte-for-byte (the entry point IS the contract).
+  const onDisk = readFileSync(join(HERE, "..", "..", "schemas", "dig-surface.schema.json"), "utf-8");
+  assert.equal(stdout, onDisk, "--print-contract output == schemas/dig-surface.schema.json");
+  // The contract covers the four primitives, the flags, the exit codes.
+  assert.deepEqual(
+    Object.keys(contract["x-primitives"]).sort(),
+    ["breadth", "depth", "pulling-threads", "resonance"]
+  );
+  for (const code of ["0", "1", "2", "130", "143"]) {
+    assert.ok(code in contract["x-exit-codes"], `exit code ${code} documented`);
+  }
+  assert.ok("query" in contract.properties && contract.required.includes("query"));
+});
+
+// ── S7 — --help works without --query ──
+test("S7 — --help prints a usage summary and exits 0 without --query", () => {
+  const { status, stdout } = runDig(["--help"]);
+  assert.equal(status, 0);
+  assert.match(stdout, /four primitives/i);
+  assert.match(stdout, /BREADTH|DEPTH|PULLING-THREADS|RESONANCE/);
+});
