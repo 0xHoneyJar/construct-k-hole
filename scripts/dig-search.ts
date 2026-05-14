@@ -583,7 +583,62 @@ function stripCliPrelude(raw: string): string {
     .trim();
 }
 
+// Retry-wrapper around the raw CLI call. Subscription-only users (the common
+// case · ~/.gemini/settings.json OAuth) have no working REST fallback, so a
+// timeout-on-first-try should retry the SAME working path with backoff before
+// the router gives up and tries OpenRouter / REST. Grounded search calls under
+// concurrent load (multiple dig processes sharing one gemini quota) regularly
+// slip past the per-call 480s budget on the first attempt; the second attempt
+// usually succeeds because the contention window has closed.
+//
+// Override the retry count via DIG_CLI_MAX_ATTEMPTS (default 3 for search, 1
+// for non-search synthesis calls — synthesis is local-only and shouldn't
+// silently retry on substantive errors).
 async function geminiCliCall(
+  model: string,
+  prompt: string,
+  opts?: { search?: boolean; maxTokens?: number; temperature?: number },
+): Promise<GeminiCallResult> {
+  if (!HAS_GEMINI_CLI) {
+    return { status: "error", error: "gemini CLI not in PATH" };
+  }
+  const { search = false } = opts ?? {};
+  const envMax = parseInt(process.env.DIG_CLI_MAX_ATTEMPTS || "0", 10);
+  const maxAttempts = envMax > 0 ? envMax : (search ? 3 : 1);
+
+  let lastResult: GeminiCallResult = { status: "error", error: "no attempts ran" };
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    lastResult = await geminiCliCallOnce(model, prompt, opts);
+    // Success and "model_not_found" are both terminal — no point retrying.
+    if (lastResult.status === "success") return lastResult;
+    if (lastResult.status === "model_not_found") return lastResult;
+
+    // Only retry on retry-shaped errors: timeouts and 5xx-class transient
+    // failures. Substantive errors (auth, malformed prompt, etc.) should fail
+    // fast so the router can move on to the next provider.
+    const lower = lastResult.error.toLowerCase();
+    const isRetryable =
+      lower.includes("timeout") ||
+      lower.includes("503") ||
+      lower.includes("504") ||
+      lower.includes("unavailable") ||
+      lower.includes("connection") ||
+      lower.includes("econnreset") ||
+      lower.includes("rate limit") ||
+      lower.includes("429");
+    if (!isRetryable) return lastResult;
+    if (attempt >= maxAttempts) return lastResult;
+
+    const backoffMs = attempt * 15_000 + Math.floor(Math.random() * 5_000);
+    process.stderr.write(
+      `[dig] CLI attempt ${attempt}/${maxAttempts} failed (${lastResult.error.slice(0, 80)}); retrying in ${(backoffMs / 1000).toFixed(0)}s...\n`,
+    );
+    await new Promise((r) => setTimeout(r, backoffMs));
+  }
+  return lastResult;
+}
+
+async function geminiCliCallOnce(
   model: string,
   prompt: string,
   opts?: { search?: boolean; maxTokens?: number; temperature?: number },
@@ -700,15 +755,20 @@ async function geminiCliCall(
     };
     // Grounded search needs significantly more wall-clock than plain generation.
     // The CLI also runs slower under subprocess than from a TTY — bias generous.
+    // Bumped to 480s in v2 because under concurrent load (multiple parallel digs
+    // sharing one gemini quota) individual grounded calls regularly exceed 300s.
     // Override via DIG_CLI_TIMEOUT_MS for slow networks / large prompts.
     const envTimeout = parseInt(process.env.DIG_CLI_TIMEOUT_MS || "0", 10);
-    const defaultMs = search ? 300_000 : 180_000;
+    const defaultMs = search ? 480_000 : 180_000;
     const timeoutMs = envTimeout > 0 ? envTimeout : defaultMs;
     const timeout = setTimeout(() => {
       child.kill("SIGTERM");
       cleanup();
       removeTmp();
-      resolveOnce({ status: "error", error: `gemini CLI timeout (${timeoutMs / 1000}s)` });
+      resolveOnce({
+        status: "error",
+        error: `gemini CLI timeout (${timeoutMs / 1000}s) — bump via DIG_CLI_TIMEOUT_MS=600000 or run digs serially (concurrent grounded calls share gemini quota)`,
+      });
     }, timeoutMs);
     child.on("close", (code) => {
       clearTimeout(timeout);
