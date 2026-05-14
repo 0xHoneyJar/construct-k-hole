@@ -43,3 +43,29 @@ jobs:
           for voice in lilly carhart shulgin warburg nelson ulbricht nakamoto; do
             test -f "identity/voices/${voice}.md" || (echo "Missing voice: ${voice}.md" && exit 1)
           done
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Validate creative-resonance-envelope fixtures
+        run: |
+          pip install --quiet jsonschema
+          python3 schemas/validate-fixtures.py
+
+      - name: Warn on schema divergence from .loa vendored copy
+        run: |
+          # The .loa vendored copy is canonically derived from this repo
+          # (x-canonical-source). It is not present in CI — this check only
+          # fires for local-dev runs. Warn-only, never a merge gate.
+          LOA_COPY="$HOME/.loa/constructs/packs/k-hole/schemas/creative-resonance-envelope.schema.json"
+          if [ -f "$LOA_COPY" ]; then
+            if ! diff -q "$LOA_COPY" schemas/creative-resonance-envelope.schema.json >/dev/null; then
+              echo "::warning::schema diverges from the .loa vendored copy — re-sync the derived copy"
+            else
+              echo "schema in sync with .loa vendored copy"
+            fi
+          else
+            echo ".loa vendored copy not reachable (expected in CI) — divergence check skipped"
+          fi

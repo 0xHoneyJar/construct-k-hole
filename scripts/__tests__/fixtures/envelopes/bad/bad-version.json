@@ -1,0 +1,5 @@
+{
+  "schema_version": "9.0.0",
+  "envelope_id": "from-the-future",
+  "threads_to_pull": ["a thread from a major version we cannot consume"]
+}

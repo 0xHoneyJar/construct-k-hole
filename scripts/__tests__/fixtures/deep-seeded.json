@@ -1,0 +1,18 @@
+{
+  "seed thread one": {
+    "text": "Result for the prepended envelope seed query.",
+    "sources": [{ "title": "Seed Source", "uri": "https://example.com/seed" }],
+    "supports": [{ "text": "A snippet from the seeded thread.", "sourceIndices": [0] }],
+    "webSearchQueries": ["seed q"]
+  },
+  "leading practitioners": {
+    "text": "Result for the reserved QUERY-derived query.",
+    "sources": [{ "title": "Query Source", "uri": "https://example.org/query" }],
+    "supports": [{ "text": "A snippet from the query-derived search.", "sourceIndices": [0] }],
+    "webSearchQueries": ["query q"]
+  },
+  "__synthesis": {
+    "text": "### Findings\n- A finding from the seeded dig.\n\n### Pull Threads\n- next thread to pull",
+    "sources": [], "supports": [], "webSearchQueries": []
+  }
+}

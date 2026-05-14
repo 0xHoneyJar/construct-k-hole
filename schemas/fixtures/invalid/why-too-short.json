@@ -1,0 +1,16 @@
+{
+  "_invalid_reason": "why.aesthetic is under 32 chars — the minLength discipline mirrors construct-rooms-substrate why.rationale (>=32 chars). A one-word 'why' is not reasoning.",
+  "schema_version": "0.1.0",
+  "envelope_id": "thin-why",
+  "ref": { "name": "Some Game", "type": "game" },
+  "direction": { "name": "populated-diorama-world-feel" },
+  "resonance": {
+    "strength": 0.5,
+    "evidence": ["a reason that has enough characters to pass minLength"]
+  },
+  "why": { "aesthetic": "looks nice" },
+  "provenance": {
+    "surfaced_by": "test-fixture",
+    "ratified_at": "2026-05-13"
+  }
+}

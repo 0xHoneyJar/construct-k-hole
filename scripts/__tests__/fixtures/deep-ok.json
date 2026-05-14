@@ -1,0 +1,20 @@
+{
+  "practitioners and researchers": {
+    "text": "Search 1: practitioners working on this thread include named researchers.",
+    "sources": [{ "title": "Practitioner Source", "uri": "https://example.com/prac" }],
+    "supports": [{ "text": "A concrete practitioner snippet.", "sourceIndices": [0] }],
+    "webSearchQueries": ["practitioners query"]
+  },
+  "fields outside of": {
+    "text": "Search 2: adjacent fields share transferable techniques.",
+    "sources": [{ "title": "Adjacent Source", "uri": "https://example.org/adj" }],
+    "supports": [{ "text": "An adjacent-domain snippet.", "sourceIndices": [0] }],
+    "webSearchQueries": ["adjacent query"]
+  },
+  "__synthesis": {
+    "text": "### Findings\n- Finding one is concrete and names a real practitioner.\n- Finding two cites an adjacent-domain technique.\n\n### Emergence\nThe pattern across both searches is convergence on shared structure.\n\n### Pull Threads\n- thread alpha worth digging deeper\n- thread beta worth digging deeper",
+    "sources": [],
+    "supports": [],
+    "webSearchQueries": []
+  }
+}

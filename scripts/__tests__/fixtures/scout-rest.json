@@ -1,0 +1,12 @@
+{
+  "text": "Miyazaki's films treat loneliness as a quiet companion rather than a problem to solve. The negative space in Spirited Away lets solitude breathe.",
+  "sources": [
+    { "title": "Miyazaki and the Poetics of Solitude", "uri": "https://example.com/miyazaki-solitude" },
+    { "title": "Negative Space in Ghibli Films", "uri": "https://example.org/ghibli-negative-space" }
+  ],
+  "supports": [
+    { "text": "Miyazaki treats loneliness as a quiet companion, not a problem to solve.", "sourceIndices": [0] },
+    { "text": "Negative space in Spirited Away lets solitude breathe across the frame.", "sourceIndices": [1] }
+  ],
+  "webSearchQueries": ["miyazaki loneliness design"]
+}

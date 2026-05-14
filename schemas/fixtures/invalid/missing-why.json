@@ -1,0 +1,15 @@
+{
+  "_invalid_reason": "Required 'why' field absent — envelope without WHY is exactly what the schema exists to forbid (mirrors construct-rooms-substrate 'no handoffs without WHY').",
+  "schema_version": "0.1.0",
+  "envelope_id": "no-why-here",
+  "ref": { "name": "Some Game", "type": "game" },
+  "direction": { "name": "populated-diorama-world-feel" },
+  "resonance": {
+    "strength": 0.5,
+    "evidence": ["a reason that has enough characters to pass minLength"]
+  },
+  "provenance": {
+    "surfaced_by": "test-fixture",
+    "ratified_at": "2026-05-13"
+  }
+}

@@ -11,24 +11,68 @@
  *   npx tsx scripts/dig-search.ts --query "your thread" --depth 3
  *   npx tsx scripts/dig-search.ts --query "your thread" --depth 0 --trail path/to/trail.md
  *   npx tsx scripts/dig-search.ts --query "your thread" --model gemini-2.5-pro
+ *   npx tsx scripts/dig-search.ts --query "your thread" --scout
+ *   npx tsx scripts/dig-search.ts --query "your thread" --depth 3 --stream
+ *   npx tsx scripts/dig-search.ts --query "your thread" --envelopes path/to/envelopes/
  *
- * Output: JSON to stdout (findings, sources, pull threads)
- * Side effect: appends to dig session trail file
+ * PULLING-THREADS primitive — --envelopes (consume) + auto-emit:
+ *   Point --envelopes at a creative-resonance-envelope (a JSON file) or a
+ *   directory of them. The activated envelopes' `threads_to_pull` become seed
+ *   queries for this dig. Seeds never crowd out the QUERY: ceil(depth/2) slots
+ *   are always reserved for query-derived searches. At --depth 1 the single
+ *   slot goes to the QUERY and seeds are ignored with a note.
+ *   Emit side: every deep dig with a --trail auto-emits a candidate
+ *   creative-resonance-envelope (its `threads_to_pull` = this dig's pull
+ *   threads) next to the trail, at <trail-dir>/envelopes/<envelope_id>.json —
+ *   so the next dig can --envelopes it. The loop closes. --no-emit-envelope
+ *   opts out; no --trail means no emission (envelopes are loop artifacts).
+ *
+ * DEPTH visibility — --stream:
+ *   Turns stdout into NDJSON — one `search` (or `search_error`) event per
+ *   completed search, plus a terminal `complete` event whose payload is the
+ *   full output object. Without --stream, stdout is the single JSON blob,
+ *   unchanged. Human progress lines stay on stderr in both modes. A failed
+ *   provider call no longer collapses the dig — it becomes a search_error and
+ *   the dig continues with the surviving searches (`failed_searches` counts them).
+ *
+ * DEPTH safety valve — SIGINT / SIGTERM:
+ *   Either signal flushes a `partial: true` artifact (completed searches,
+ *   synthesis: null) to stdout and exits 130 (SIGINT) / 143 (SIGTERM) — a
+ *   clean, automation-detectable exit, not a crash. In-flight fetches are
+ *   cancelled and spawn'd CLI children reaped — no orphans. Abort-with-partial
+ *   is a first-class outcome: discover a wrong question after 2 minutes, not 25.
+ *
+ * BREADTH primitive — --scout:
+ *   A fast, wide, shallow pass: one search, NO synthesis, source list + a
+ *   one-line gist per source. Answers "is this question pointed at the right
+ *   space?" in seconds, before committing a deep run. It is a single search
+ *   call — it does NOT decompose a multi-faceted question the way a depth-N
+ *   dig does; scout answers "right space?", not "right facets?". --scout and
+ *   --depth N are mutually exclusive.
+ *
+ * Output: JSON to stdout (deep dig: findings/sources/pull-threads · scout:
+ *   mode:"scout" + sources with gist + gist_quality)
+ * Side effect: deep dig appends to the trail file; scout has no side effects
  */
 
 import {
   readFileSync,
+  writeFileSync,
+  writeSync,
   mkdirSync,
   existsSync,
   appendFileSync,
   unlinkSync,
   openSync,
   closeSync,
+  readdirSync,
+  statSync,
 } from "fs";
 import { join, dirname, resolve, relative } from "path";
 import { fileURLToPath } from "url";
-import { spawn, spawnSync } from "child_process";
+import { spawn, spawnSync, type ChildProcess } from "child_process";
 import { tmpdir } from "os";
+import { createHash } from "crypto";
 
 // ─── Config ─────────────────────────────────────────────────────
 
@@ -125,6 +169,41 @@ function getArg(name: string): string | null {
   return process.argv[idx + 1] ?? null;
 }
 
+// Boolean flag presence check (no value consumed). Used by --scout / --stream /
+// --no-emit-envelope (Phase 1 primitives).
+function getFlag(name: string): boolean {
+  return process.argv.includes(`--${name}`);
+}
+
+// ─── Single entry point: --print-contract / --help (S7) ──────────
+// dig-search.ts is THE entry point — the four primitives are flags on it.
+// --print-contract emits the published surface contract for agent self-
+// discovery; --help is the human-readable summary. Both handled before
+// --query is required.
+if (getFlag("print-contract")) {
+  process.stdout.write(
+    readFileSync(join(REPO_ROOT, "schemas", "dig-surface.schema.json"), "utf-8")
+  );
+  process.exit(0);
+}
+if (getFlag("help")) {
+  process.stdout.write(
+    `dig-search — the K-hole construct's one entry point. Four primitives:\n\n` +
+    `  BREADTH         --scout            one fast shallow pass (no synthesis)\n` +
+    `  DEPTH           --depth <0-4>      N search angles deep   (default 2)\n` +
+    `                  --stream          progressive NDJSON output\n` +
+    `                  SIGINT/SIGTERM    abort-with-partial, exit 130/143\n` +
+    `  PULLING-THREADS --envelopes <p>    seed queries from envelopes' threads_to_pull\n` +
+    `                  --no-emit-envelope opt out of auto-emit (default: emit on --trail)\n` +
+    `  RESONANCE       --resonance <p>    resonance profile weighting\n\n` +
+    `  --query <thread>   (required)      --trail <p.md>   --model <name>\n` +
+    `  --print-contract   full machine-readable surface contract → stdout\n\n` +
+    `Exit: 0 ok · 1 runtime error · 2 validation error · 130 SIGINT · 143 SIGTERM\n` +
+    `Full contract: schemas/dig-surface.schema.json\n`
+  );
+  process.exit(0);
+}
+
 const QUERY = getArg("query");
 if (!QUERY) {
   console.log(
@@ -141,6 +220,82 @@ const SEARCH_DEPTH = Math.min(
   Math.max(parseInt(getArg("depth") || "2", 10), 0),
   4
 );
+
+// ─── BREADTH primitive: scout (FR-1) ─────────────────────────────
+// --scout is a fast, wide, shallow pass — one search, no synthesis, source
+// list + one-line gist per source. Answers "is this question pointed at the
+// right space?" before committing a deep run. --depth 0 is NOT reused (it is
+// already "Lilly's tank", synthesis-only); --scout is a distinct flag and is
+// mutually exclusive with an explicit --depth.
+const SCOUT = getFlag("scout");
+const DEPTH_EXPLICIT = process.argv.includes("--depth");
+if (SCOUT && DEPTH_EXPLICIT) {
+  console.log(
+    JSON.stringify({
+      error:
+        "--scout and --depth are mutually exclusive. --scout is a single shallow pass; --depth N is a deep dig.",
+    })
+  );
+  process.exit(2);
+}
+
+// ─── DEPTH visibility: streaming (FR-2) ──────────────────────────
+// --stream turns stdout into NDJSON — one event per completed/failed search,
+// plus a terminal `complete` event whose payload is the full output object.
+// Absent → today's single-blob stdout, unchanged. --stream gates only the
+// *emit*; the accumulator below is populated unconditionally.
+const STREAM = getFlag("stream");
+
+// A search either resolves to a SearchResult or fails. `query_index` is the
+// stable definition-order index (NOT completion order — completion order is
+// implicit in stream line arrival).
+type SearchResult = {
+  query: string;
+  text: string;
+  sources: { title: string; uri: string }[];
+  supports: { text: string; sourceIndices: number[] }[];
+  webSearchQueries: string[];
+};
+type SettledSearch =
+  | { status: "ok"; query_index: number; result: SearchResult }
+  | { status: "error"; query_index: number; query: string; error: string };
+
+// FR-2 + FR-3: the search accumulator. Populated by the settle-handler on
+// EVERY run (not --stream-gated — SKP-001a) so FR-3's SIGINT handler can flush
+// whatever completed even on the common non-streaming path. Reset at the top
+// of each dig() (module-level state must not bleed across runs — tests run
+// many digs in one process).
+let accumulator: SettledSearch[] = [];
+
+// FR-3: the SIGINT/SIGTERM escape hatch's shared state.
+//   abortController — its .signal is threaded into every fetch; the signal
+//     handler .abort()s it to genuinely CANCEL in-flight requests (IMP-003 —
+//     abandoning a promise leaves the HTTP request live).
+//   activeChildren — every spawn'd gemini-CLI child registers here so the
+//     handler can kill ALL of them; concurrent searches mean several may be
+//     live at once (SKP-002b — a single handle would orphan the rest).
+//   totalPlannedSearches — set once queries are planned, so a partial artifact
+//     can report completed/total even when SIGINT lands mid-flight.
+const abortController = new AbortController();
+const activeChildren = new Set<ChildProcess>();
+let totalPlannedSearches = 0;
+
+// FR-2: structured stream event — one NDJSON line on stdout.
+function emitEvent(evt: Record<string, unknown>): void {
+  process.stdout.write(JSON.stringify(evt) + "\n");
+}
+
+// ─── PULLING-THREADS primitive: envelope seeds (FR-4) ────────────
+// --envelopes <path> activates a creative-resonance-envelope (a JSON file) or
+// a directory of them. The activated envelopes' `threads_to_pull` become seed
+// queries for this dig — closing the loop where one dig's surfaced threads
+// feed the next dig's input. Seeds never crowd out the QUERY (planSearchQueries).
+const ENVELOPES_PATH = getArg("envelopes");
+
+// FR-5: every non-scout dig with a --trail auto-emits a candidate
+// creative-resonance-envelope capturing what it surfaced (so the next dig can
+// consume its threads_to_pull). --no-emit-envelope opts out.
+const NO_EMIT_ENVELOPE = getFlag("no-emit-envelope");
 // Default: gemini-3-pro-preview (the gemini CLI resolves this to
 // gemini-3.1-pro-preview server-side — the current latest, per
 // https://deepmind.google/models/gemini/pro/). Pro-tier is required for
@@ -248,7 +403,10 @@ async function geminiCall(
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
-        signal: controller.signal,
+        // FR-3 (IMP-003): combine the per-call timeout signal with the
+        // module-level abortController so a SIGINT/SIGTERM genuinely cancels
+        // this in-flight request, not just abandons the promise.
+        signal: AbortSignal.any([controller.signal, abortController.signal]),
       });
 
       // Read body exactly once for error responses
@@ -414,7 +572,10 @@ async function openrouterCall(
           "X-Title": "Purupuru Dig",
         },
         body: JSON.stringify(body),
-        signal: controller.signal,
+        // FR-3 (IMP-003): combine the per-call timeout signal with the
+        // module-level abortController so a SIGINT/SIGTERM genuinely cancels
+        // this in-flight request, not just abandons the promise.
+        signal: AbortSignal.any([controller.signal, abortController.signal]),
       });
 
       if (!res.ok) {
@@ -510,6 +671,12 @@ async function openrouterCall(
 // when the API path is dead.
 
 
+// The gemini CLI binary. DIG_CLI_BIN overrides it — used by the test suite to
+// point geminiCliCall's spawn at a fake binary so subprocess registration /
+// reaping (FR-3 / SKP-002b) can be exercised at the spawn seam, which the
+// gemini()-boundary mock cannot reach (SKP-001b).
+const GEMINI_CLI_BIN = process.env.DIG_CLI_BIN || "gemini";
+
 const HAS_GEMINI_CLI = (() => {
   // Skip the probe entirely when DIG_FORCE_REST=1 — no point paying the
   // subprocess startup latency only to ignore the result downstream (F8).
@@ -519,7 +686,7 @@ const HAS_GEMINI_CLI = (() => {
     // `which` is unix-only (Windows uses `where`). A direct version probe
     // also works for shimmed binaries like `gemini.cmd`.
     const probe = spawnSync(
-      "gemini",
+      GEMINI_CLI_BIN,
       ["--version"],
       { encoding: "utf8", timeout: 5000, shell: process.platform === "win32" },
     );
@@ -734,18 +901,23 @@ async function geminiCliCallOnce(
       return;
     }
 
-    const child = spawn("gemini", args, {
+    const child = spawn(GEMINI_CLI_BIN, args, {
       env: cliEnv as NodeJS.ProcessEnv,
       stdio: ["ignore", outFd, errFd],
       // Run from repo root so workspace .gemini/settings.json (which
       // disables agent skills like gemini-deep-research) is discovered.
       cwd: REPO_ROOT,
     });
-    // Cleanup function — closes fds and removes temp files; idempotent.
+    // FR-3 (SKP-002b): register the child so the SIGINT/SIGTERM handler can
+    // reap it. Concurrent searches mean several may be live at once.
+    activeChildren.add(child);
+    // Cleanup function — closes fds, removes the child from the reaper set;
+    // idempotent.
     let cleaned = false;
     const cleanup = () => {
       if (cleaned) return;
       cleaned = true;
+      activeChildren.delete(child);
       try { closeSync(outFd); } catch {}
       try { closeSync(errFd); } catch {}
     };
@@ -946,6 +1118,54 @@ async function gemini(
     temperature?: number;
   }
 ): Promise<GeminiResponse> {
+  // ── Test seam (DIG_MOCK_PROVIDER) ──────────────────────────────
+  // When DIG_MOCK_PROVIDER points at a fixture file, return canned
+  // GeminiResponse data instead of calling a real provider. This is the
+  // gemini()-boundary mock the SDD §6 test design relies on — it lets the
+  // subprocess integration suite exercise the full real CLI path
+  // deterministically with zero API/subscription spend. Production never
+  // sets this env var.
+  //
+  // Fixture forms:
+  //   • a single GeminiResponse           — returned for every call
+  //   • a keyed map { "<key>": value }    — `value` is a GeminiResponse, or
+  //     { "__error": "msg" } to make that call THROW (tests the search_error
+  //     path). Key resolution: search calls (opts.search) match the first key
+  //     whose substring is in the prompt; synthesis calls (no opts.search)
+  //     use "__synthesis"; "__default" is the fallback for either.
+  const mockPath = process.env.DIG_MOCK_PROVIDER;
+  if (mockPath) {
+    const fixture = JSON.parse(readFileSync(mockPath, "utf-8"));
+    const resolveMock = (): unknown => {
+      if (!fixture || typeof fixture !== "object" || Array.isArray(fixture) || "text" in fixture) {
+        return fixture; // single-GeminiResponse form
+      }
+      if (opts?.search) {
+        const key = Object.keys(fixture).find(
+          (k) => !k.startsWith("__") && prompt.includes(k)
+        );
+        if (key) return fixture[key];
+      } else if ("__synthesis" in fixture) {
+        return fixture["__synthesis"];
+      }
+      if ("__default" in fixture) return fixture["__default"];
+      const firstReal = Object.entries(fixture).find(([k]) => !k.startsWith("__"));
+      return firstReal ? firstReal[1] : fixture;
+    };
+    const picked = resolveMock();
+    if (picked && typeof picked === "object" && "__error" in (picked as object)) {
+      throw new Error(String((picked as { __error: unknown }).__error));
+    }
+    // `__delay_ms` on an entry makes that call hang for N ms — lets the test
+    // suite catch a dig MID-FLIGHT to exercise the FR-3 SIGINT/SIGTERM handler.
+    if (picked && typeof picked === "object" && "__delay_ms" in (picked as object)) {
+      const { __delay_ms, ...rest } = picked as Record<string, unknown>;
+      await new Promise((r) => setTimeout(r, Number(__delay_ms) || 0));
+      return rest as unknown as GeminiResponse;
+    }
+    return picked as GeminiResponse;
+  }
+
   const modelsToTry = [activeModel, ...DIG_FALLBACK_MODELS.filter(m => m !== activeModel)];
   let lastError = "";
 
@@ -1153,6 +1373,310 @@ function buildSearchQueries(thread: string, depth: number): string[] {
   return queries;
 }
 
+// ─── Envelope seeds (PULLING-THREADS consume · FR-4) ─────────────
+
+// The canonical schema version, read once from the in-repo schema's
+// `x-schema-version`. Consumed envelopes are version-checked against this.
+function inRepoSchemaVersion(): string {
+  try {
+    const schemaPath = join(
+      REPO_ROOT,
+      "schemas",
+      "creative-resonance-envelope.schema.json"
+    );
+    const schema = JSON.parse(readFileSync(schemaPath, "utf-8"));
+    return typeof schema["x-schema-version"] === "string"
+      ? schema["x-schema-version"]
+      : "0.0.0";
+  } catch {
+    return "0.0.0";
+  }
+}
+
+// Resolve --envelopes (a file or a directory of *.json) into a deterministic,
+// deduped list of seed query strings drawn from each envelope's
+// `threads_to_pull`. Untrusted input — parsed defensively (try/catch, no eval),
+// version-checked, never shelled out.
+//   • malformed JSON in a file        → stderr warn, skip that file, continue
+//   • empty dir / no *.json           → stderr note, return []
+//   • envelope schema_version MAJOR ≠ → hard error, exit 2
+//   • envelope schema_version MINOR > → stderr warn, proceed
+function loadEnvelopeSeeds(envPath: string): string[] {
+  const resolved = resolve(process.cwd(), envPath);
+  if (!existsSync(resolved)) {
+    process.stderr.write(`[dig] --envelopes path not found: ${envPath} — no seeds.\n`);
+    return [];
+  }
+
+  let files: string[];
+  if (statSync(resolved).isDirectory()) {
+    files = readdirSync(resolved)
+      .filter((f) => f.endsWith(".json"))
+      .sort() // deterministic file order (IMP-006)
+      .map((f) => join(resolved, f));
+    if (files.length === 0) {
+      process.stderr.write(`[dig] --envelopes dir has no *.json files — no seeds.\n`);
+      return [];
+    }
+  } else {
+    files = [resolved];
+  }
+
+  const canonicalVersion = inRepoSchemaVersion();
+  const canonicalMajor = canonicalVersion.split(".")[0];
+  const seeds: string[] = [];
+  const seen = new Set<string>();
+
+  for (const file of files) {
+    let env: Record<string, unknown>;
+    try {
+      env = JSON.parse(readFileSync(file, "utf-8"));
+    } catch (err) {
+      process.stderr.write(
+        `[dig] --envelopes: skipping unparseable file ${file}: ${String(err).slice(0, 80)}\n`
+      );
+      continue;
+    }
+    if (!env || typeof env !== "object" || Array.isArray(env)) {
+      process.stderr.write(`[dig] --envelopes: skipping non-object envelope ${file}\n`);
+      continue;
+    }
+
+    // Version skew (IMP-008): major mismatch is a hard stop; minor-ahead warns.
+    const envVersion = typeof env.schema_version === "string" ? env.schema_version : "";
+    const envMajor = envVersion.split(".")[0];
+    if (envVersion && envMajor !== canonicalMajor) {
+      console.log(
+        JSON.stringify({
+          error:
+            `Envelope ${file} declares schema_version ${envVersion}; this repo's schema ` +
+            `is ${canonicalVersion}. Major-version mismatch — refusing to consume (the ` +
+            `consume/emit loop must not silently drift).`,
+        })
+      );
+      process.exit(2);
+    }
+    if (envVersion && envVersion !== canonicalVersion) {
+      process.stderr.write(
+        `[dig] --envelopes: ${file} is schema_version ${envVersion} vs in-repo ${canonicalVersion} — proceeding (minor skew).\n`
+      );
+    }
+
+    // threads_to_pull is the optional-tier field FR-4 consumes.
+    const threads = Array.isArray(env.threads_to_pull) ? env.threads_to_pull : [];
+    for (const t of threads) {
+      if (typeof t === "string" && t.trim() && !seen.has(t)) {
+        seen.add(t);
+        seeds.push(t.trim()); // in-array order preserved (IMP-006)
+      }
+    }
+  }
+
+  if (seeds.length === 0) {
+    process.stderr.write(`[dig] --envelopes: activated envelopes carry no threads_to_pull — no seeds.\n`);
+  } else {
+    process.stderr.write(`[dig] --envelopes: ${seeds.length} seed thread(s) loaded.\n`);
+  }
+  return seeds;
+}
+
+// Plan the dig's query set. With no seeds → today's behavior unchanged. With
+// seeds → reserve ceil(depth/2) slots for QUERY-derived queries so the
+// operator's immediate intent is ALWAYS served (IMP-005); seeds fill the
+// remainder, prepended. At depth 1 the single slot goes to the QUERY and seeds
+// are ignored with a note.
+function planSearchQueries(
+  query: string,
+  depth: number,
+  seeds: string[]
+): string[] {
+  if (seeds.length === 0) return buildSearchQueries(query, depth);
+
+  const reserve = Math.ceil(depth / 2);
+  const seedSlots = depth - reserve;
+  const queryDerived = buildSearchQueries(query, reserve);
+
+  if (seedSlots <= 0) {
+    process.stderr.write(
+      `[dig] ${seeds.length} envelope seed(s) ignored — depth ${depth} reserves all slots ` +
+      `for the query. Raise --depth to use seeds.\n`
+    );
+    return queryDerived;
+  }
+
+  const usedSeeds = seeds.slice(0, seedSlots);
+  process.stderr.write(
+    `[dig] ${usedSeeds.length} envelope seed(s) prepended; ${reserve} slot(s) reserved for the query.\n`
+  );
+  return [...usedSeeds, ...queryDerived];
+}
+
+// ─── Envelope emission (PULLING-THREADS emit + RESONANCE · FR-5) ──
+
+// RESONANCE primitive's quantitative anchor: map rateDepth()'s symbol scale
+// (−/±/+/++/+++) to a 0–1 resonance.strength. Explicit table, pure lookup
+// (IMP-009). NOTE: this corrects SDD §FR-5.1, which named the Shulgin words
+// surface/notable/deep/profound — rateDepth() actually returns these symbols.
+function depthRatingToStrength(rating: string): number {
+  const table: Record<string, number> = {
+    "−": 0.3,    // rateDepth score 0
+    "±": 0.45,   // rateDepth score 1
+    "+": 0.6,    // rateDepth score 2
+    "++": 0.8,   // rateDepth score 3
+    "+++": 0.95, // rateDepth score 4
+  };
+  if (rating in table) return table[rating];
+  process.stderr.write(`[dig] depthRatingToStrength: unknown rating "${rating}" — defaulting to 0.30\n`);
+  return 0.3;
+}
+
+// kebab-case slug, guaranteed to start [a-z0-9] and be non-empty (the schema's
+// envelope_id / direction.name patterns require it).
+function slugify(s: string, maxLen = 70): string {
+  const slug = s
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, maxLen)
+    .replace(/-+$/g, "");
+  return slug || "dig";
+}
+
+type EmittedEnvelope = {
+  schema_version: string;
+  envelope_id: string;
+  ref: { name: string; type: string };
+  direction: { name: string };
+  resonance: { strength: number; evidence: string[] };
+  why: { design: string };
+  provenance: { surfaced_by: string; ratified_at: string; candidate: boolean };
+  threads_to_pull: string[];
+};
+
+// Construct a schema-valid candidate envelope from a completed dig (SDD §FR-5.1).
+// threads_to_pull = parsed.pull_threads — THIS is the loop-closing mapping:
+// this dig's pull-threads become the next dig's FR-4 seed queries.
+function buildEmittedEnvelope(
+  query: string,
+  parsed: { findings: string; pull_threads: string[]; emergence: string | null },
+  depthRating: string,
+  sourceCount: number,
+  synthesis: string,
+  trailFile: string
+): EmittedEnvelope {
+  const slug = slugify(query);
+  const idHash = createHash("sha256").update(query).digest("hex").slice(0, 8);
+  const envelope_id = `${slug}-${idHash}`.slice(0, 80);
+
+  // resonance.evidence — schema requires ≥1 concrete item. Derive from the
+  // findings bullets; fall back to a source-count statement if findings is bare.
+  const evidence = parsed.findings
+    .split("\n")
+    .map((l) => l.replace(/^[-*]\s*/, "").replace(/\*\*/g, "").trim())
+    .filter((l) => l.length > 0)
+    .map((l) => l.slice(0, 600))
+    .slice(0, 32);
+  if (evidence.length === 0) {
+    evidence.push(`Dig surfaced ${sourceCount} source(s) for: ${query}`.slice(0, 600));
+  }
+
+  // why.design — schema requires ≥32 chars. First synthesis paragraph, or a
+  // grounded fallback sentence.
+  const firstPara = (synthesis.split(/\n\n+/)[0] || "").trim().slice(0, 1200);
+  const designWhy =
+    firstPara.length >= 32
+      ? firstPara
+      : `Dig on "${query}" surfaced ${sourceCount} sources at ${depthRating} depth — synthesis grounded the direction.`;
+
+  return {
+    schema_version: inRepoSchemaVersion(),
+    envelope_id,
+    ref: { name: query.slice(0, 200), type: "concept" },
+    direction: { name: slug.slice(0, 120) },
+    resonance: {
+      strength: depthRatingToStrength(depthRating),
+      evidence,
+    },
+    why: { design: designWhy.slice(0, 1200) },
+    provenance: {
+      surfaced_by: trailFile,
+      ratified_at: new Date().toISOString().split("T")[0],
+      candidate: true,
+    },
+    threads_to_pull: parsed.pull_threads.map((t) => t.slice(0, 300)).slice(0, 32),
+  };
+}
+
+// Structural validation of a constructed envelope (SDD §FR-5.3). Not a full
+// JSON-Schema pass (NFR-1: no new runtime dep) — checks the required keys and
+// the cheap constraints that catch a construction bug. Returns problems (empty
+// = ok).
+function validateEnvelopeStructure(env: EmittedEnvelope): string[] {
+  const problems: string[] = [];
+  for (const k of ["schema_version", "envelope_id", "ref", "direction", "resonance", "why", "provenance"]) {
+    if (!(k in env)) problems.push(`missing required key: ${k}`);
+  }
+  if (!/^\d+\.\d+\.\d+$/.test(env.schema_version)) problems.push("schema_version not semver");
+  if (!/^[a-z0-9][a-z0-9_-]*$/.test(env.envelope_id)) problems.push("envelope_id fails pattern");
+  if (env.envelope_id.length > 80) problems.push("envelope_id too long");
+  if (!env.ref?.name || !env.ref?.type) problems.push("ref.name/type missing");
+  if (!env.direction?.name) problems.push("direction.name missing");
+  if (typeof env.resonance?.strength !== "number" || env.resonance.strength < 0 || env.resonance.strength > 1)
+    problems.push("resonance.strength out of [0,1]");
+  if (!Array.isArray(env.resonance?.evidence) || env.resonance.evidence.length < 1)
+    problems.push("resonance.evidence must be a non-empty array");
+  const lenses = ["philosophical", "aesthetic", "design"] as const;
+  const populated = lenses.filter((l) => typeof (env.why as Record<string, unknown>)?.[l] === "string");
+  if (populated.length < 1) problems.push("why must have ≥1 lens");
+  for (const l of populated) {
+    if (((env.why as Record<string, string>)[l] || "").length < 32)
+      problems.push(`why.${l} shorter than 32 chars`);
+  }
+  if (!env.provenance?.surfaced_by) problems.push("provenance.surfaced_by missing");
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(env.provenance?.ratified_at || ""))
+    problems.push("provenance.ratified_at not ISO date");
+  return problems;
+}
+
+// Build + validate + write a candidate envelope. Returns the written path, or
+// null when emission is skipped (no --trail, --no-emit-envelope) or when a
+// construction bug fails structural validation (warn + skip — never crash the
+// dig over emission). Path is deterministic from envelope_id (re-runs overwrite).
+function emitEnvelope(
+  query: string,
+  parsed: { findings: string; pull_threads: string[]; emergence: string | null },
+  depthRating: string,
+  sourceCount: number,
+  synthesis: string,
+  trailFile: string
+): string | null {
+  if (NO_EMIT_ENVELOPE) return null;
+  if (!TRAIL_PATH) {
+    process.stderr.write(
+      `[dig] envelope emission skipped — no --trail (envelopes are loop artifacts; the trail is the loop's home).\n`
+    );
+    return null;
+  }
+
+  const envelope = buildEmittedEnvelope(query, parsed, depthRating, sourceCount, synthesis, trailFile);
+  const problems = validateEnvelopeStructure(envelope);
+  if (problems.length > 0) {
+    process.stderr.write(
+      `[dig] envelope emission skipped — constructed envelope failed validation: ${problems.join("; ")}\n`
+    );
+    return null;
+  }
+
+  // Envelopes live next to where the operator pointed --trail.
+  const trailDir = dirname(resolve(process.cwd(), TRAIL_PATH));
+  const envDir = join(trailDir, "envelopes");
+  mkdirSync(envDir, { recursive: true });
+  const envPath = join(envDir, `${envelope.envelope_id}.json`);
+  writeFileSync(envPath, JSON.stringify(envelope, null, 2));
+  process.stderr.write(`[dig] Emitted candidate envelope: ${envPath}\n`);
+  return envPath;
+}
+
 // ─── Synthesis ───────────────────────────────────────────────────
 
 async function synthesize(
@@ -1256,10 +1780,96 @@ async function synthesize(
   return result.text;
 }
 
+// ─── Scout (BREADTH primitive · FR-1) ────────────────────────────
+
+type GistQuality = "grounded" | "text-matched" | "title-only";
+
+// Cross-provider gist extraction. `supports[].text` grounding metadata is
+// specific to the Gemini REST route; the CLI and OpenRouter routes may not
+// return it. Three-tier precedence, applied per source — and the tier that
+// fired is disclosed via `gist_quality` so the caller knows the gist's
+// provenance rather than seeing silent degradation.
+function extractGist(
+  source: { title: string; uri: string },
+  sourceIndex: number,
+  result: GeminiResponse
+): { gist: string; gist_quality: GistQuality } {
+  // Tier 1 — REST grounding metadata cites this source index.
+  const support = result.supports.find((s) =>
+    s.sourceIndices.includes(sourceIndex)
+  );
+  if (support?.text?.trim()) {
+    return { gist: support.text.trim().slice(0, 200), gist_quality: "grounded" };
+  }
+  // Tier 2 — scan the response prose for a sentence naming this source.
+  let needle = source.title;
+  try {
+    needle = new URL(source.uri).hostname.replace(/^www\./, "");
+  } catch {
+    /* keep title as needle */
+  }
+  const sentences = (result.text || "").split(/(?<=[.!?])\s+/);
+  const hit = sentences.find(
+    (s) =>
+      (source.title && s.includes(source.title)) || (needle && s.includes(needle))
+  );
+  if (hit?.trim()) {
+    return { gist: hit.trim().slice(0, 200), gist_quality: "text-matched" };
+  }
+  // Tier 3 — nothing groundable.
+  return {
+    gist: `${source.title} (no snippet — provider returned no groundable text)`,
+    gist_quality: "title-only",
+  };
+}
+
+// One search, no synthesis, no trail, no envelope emission. The BREADTH
+// primitive: validate a question's direction in seconds before a deep run.
+async function scout() {
+  const startTime = Date.now();
+  process.stderr.write(`[dig] Scout: "${QUERY}" | Model: ${activeModel}\n`);
+
+  const result = await gemini(QUERY!, {
+    search: true,
+    maxTokens: 2048,
+    temperature: 0.0,
+  });
+
+  // Dedupe sources — mirror dig()'s vertex-redirect handling.
+  const deduped = [
+    ...new Map(result.sources.map((s) => [s.uri, s])).values(),
+  ].filter((s) => s.uri.startsWith("http"));
+  const nonVertex = deduped.filter(
+    (s) => !s.uri.includes("vertexaisearch.cloud.google.com")
+  );
+  const uniqueSources = nonVertex.length > 0 ? nonVertex : deduped;
+
+  const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+  process.stderr.write(
+    `[dig] Scout done in ${elapsed}s | ${uniqueSources.length} sources\n`
+  );
+
+  const output = {
+    mode: "scout",
+    query: QUERY,
+    sources: uniqueSources.map((s) => {
+      const origIndex = result.sources.findIndex((o) => o.uri === s.uri);
+      const { gist, gist_quality } = extractGist(s, origIndex, result);
+      return { title: s.title, url: s.uri, gist, gist_quality };
+    }),
+    source_count: uniqueSources.length,
+    elapsed_s: elapsed,
+    note: "scout pass — direction check only, not a deep result",
+  };
+
+  console.log(JSON.stringify(output, null, 2));
+}
+
 // ─── Main ────────────────────────────────────────────────────────
 
 async function dig() {
   const startTime = Date.now();
+  accumulator = []; // SKP-001a: module-level state must not bleed across runs.
   const resonance = loadResonance();
   const trail = loadTrail();
 
@@ -1270,39 +1880,90 @@ async function dig() {
   if (trail) process.stderr.write(`[dig] Trail context loaded\n`);
 
   // Phase: Search (skip at depth 0 — Lilly's tank)
-  type SearchResult = {
-    query: string; text: string;
-    sources: { title: string; uri: string }[];
-    supports: { text: string; sourceIndices: number[] }[];
-    webSearchQueries: string[];
-  };
+  // SearchResult / SettledSearch and `accumulator` are module-level (FR-2/FR-3).
   let searches: SearchResult[] = [];
+  let failedSearches = 0;
 
   if (SEARCH_DEPTH === 0) {
     process.stderr.write(`[dig] Depth 0: tank mode \u2014 synthesizing from trail + resonance only\n`);
   } else {
-    const queries = buildSearchQueries(QUERY, SEARCH_DEPTH);
+    // FR-4: --envelopes seeds the query set with threads_to_pull from
+    // activated envelopes — without crowding out the QUERY (planSearchQueries).
+    const seeds = ENVELOPES_PATH ? loadEnvelopeSeeds(ENVELOPES_PATH) : [];
+    const queries = planSearchQueries(QUERY!, SEARCH_DEPTH, seeds);
+    totalPlannedSearches = queries.length; // FR-3: for the partial artifact's completed/total.
     process.stderr.write(`[dig] Running ${queries.length} search(es) in parallel...\n`);
 
-    searches = await Promise.all(
-      queries.map(async (query, i) => {
-        const result = await gemini(query, {
-          search: true,
-          maxTokens: 4096,
-          temperature: 0.0,
-        });
-        process.stderr.write(
-          `[dig] Search ${i + 1}/${queries.length}: ${result.sources.length} sources, ${result.webSearchQueries.length} web queries\n`
-        );
-        return {
-          query,
-          text: result.text,
-          sources: result.sources,
-          supports: result.supports,
-          webSearchQueries: result.webSearchQueries,
-        };
+    // allSettled semantics (IMP-002): each task self-handles its own failure
+    // and never rejects, so one bad provider call cannot collapse the dig.
+    // Each task, AS IT SETTLES: (1) pushes to the accumulator UNCONDITIONALLY
+    // (SKP-001a — FR-3's escape hatch depends on this), (2) emits one NDJSON
+    // line if --stream.
+    const settled: SettledSearch[] = await Promise.all(
+      queries.map(async (query, i): Promise<SettledSearch> => {
+        const t0 = Date.now();
+        try {
+          const result = await gemini(query, {
+            search: true,
+            maxTokens: 4096,
+            temperature: 0.0,
+          });
+          process.stderr.write(
+            `[dig] Search ${i + 1}/${queries.length}: ${result.sources.length} sources, ${result.webSearchQueries.length} web queries\n`
+          );
+          const entry: SettledSearch = {
+            status: "ok",
+            query_index: i,
+            result: {
+              query,
+              text: result.text,
+              sources: result.sources,
+              supports: result.supports,
+              webSearchQueries: result.webSearchQueries,
+            },
+          };
+          accumulator.push(entry);
+          if (STREAM) {
+            emitEvent({
+              event: "search",
+              query_index: i,
+              of: queries.length,
+              query,
+              source_count: result.sources.length,
+              elapsed_ms: Date.now() - t0,
+            });
+          }
+          return entry;
+        } catch (err) {
+          const error = String(err);
+          process.stderr.write(
+            `[dig] Search ${i + 1}/${queries.length} FAILED: ${error.slice(0, 80)}\n`
+          );
+          const entry: SettledSearch = {
+            status: "error",
+            query_index: i,
+            query,
+            error,
+          };
+          accumulator.push(entry);
+          if (STREAM) {
+            emitEvent({
+              event: "search_error",
+              query_index: i,
+              of: queries.length,
+              query,
+              error,
+            });
+          }
+          return entry;
+        }
       })
     );
+
+    searches = settled
+      .filter((s): s is Extract<SettledSearch, { status: "ok" }> => s.status === "ok")
+      .map((s) => s.result);
+    failedSearches = settled.length - searches.length;
   }
 
   // Deduplicate sources. The REST grounded-search path returns groundingChunks
@@ -1361,6 +2022,17 @@ async function dig() {
 
   appendFileSync(trailFile, trailEntry);
 
+  // FR-5: emit a candidate creative-resonance-envelope — this dig's
+  // pull_threads become the next dig's --envelopes seeds (the loop closes).
+  const emittedEnvelope = emitEnvelope(
+    QUERY!,
+    parsed,
+    depthRating,
+    uniqueSources.length,
+    synthesis,
+    trailFile
+  );
+
   // Collect all web search queries Gemini actually executed
   const allWebSearchQueries = [...new Set(searches.flatMap((s) => s.webSearchQueries))];
   if (allWebSearchQueries.length) {
@@ -1381,16 +2053,93 @@ async function dig() {
     })),
     source_count: uniqueSources.length,
     search_count: searches.length,
+    failed_searches: failedSearches,
     web_search_queries: allWebSearchQueries,
     had_resonance: !!resonance,
     had_trail: !!trail,
     trail_file: trailFile,
+    emitted_envelope: emittedEnvelope,
   };
 
-  console.log(JSON.stringify(output, null, 2));
+  // FR-2: --stream → the final result is the terminal `complete` NDJSON event
+  // (payload identical to the non-stream blob). Otherwise → today's single blob.
+  if (STREAM) {
+    // `event` last so it always wins, even if `output` ever gains an `event` key.
+    emitEvent({ ...output, event: "complete" });
+  } else {
+    console.log(JSON.stringify(output, null, 2));
+  }
+
+  // Test-only state dump (DIG_DUMP_STATE env seam, SDD §6 / IMP-014) — lets the
+  // subprocess suite assert the accumulator was populated on the non-stream path.
+  if (process.env.DIG_DUMP_STATE) {
+    writeFileSync(
+      process.env.DIG_DUMP_STATE,
+      JSON.stringify({ accumulator, failed_searches: failedSearches })
+    );
+  }
 }
 
-dig().catch((err) => {
+// ─── DEPTH safety valve: SIGINT/SIGTERM escape hatch (FR-3) ──────
+// A wrong question is discovered after 2 minutes, not 25 — abort-with-partial
+// is a first-class outcome, not a crash.
+
+// The partial artifact (SDD §4.3). synthesis is ALWAYS null — synthesize() is
+// one atomic call, there is no "partial synthesis" (IMP-008).
+function buildPartialArtifact(): Record<string, unknown> {
+  const ok = accumulator.filter(
+    (s): s is Extract<SettledSearch, { status: "ok" }> => s.status === "ok"
+  );
+  const failed = accumulator.filter((s) => s.status === "error");
+  const sources = [
+    ...new Map(
+      ok.flatMap((s) => s.result.sources).map((x) => [x.uri, x])
+    ).values(),
+  ].filter((s) => s.uri.startsWith("http"));
+  return {
+    partial: true,
+    query: QUERY,
+    completed_searches: ok.length,
+    failed_searches: failed.length,
+    total_searches: totalPlannedSearches || accumulator.length,
+    sources: sources.map((s) => ({ title: s.title, url: s.uri })),
+    synthesis: null,
+    reason: "aborted with partial results",
+  };
+}
+
+let aborting = false;
+function onSignal(sig: "SIGINT" | "SIGTERM"): () => void {
+  return () => {
+    if (aborting) return; // double-signal guard
+    aborting = true;
+    abortController.abort(); // IMP-003: cancel in-flight fetches
+    for (const c of activeChildren) {
+      try { c.kill("SIGTERM"); } catch { /* already gone */ }
+    }
+    const partial = buildPartialArtifact();
+    if (TRAIL_PATH) {
+      try {
+        const date = new Date().toISOString().split("T")[0];
+        appendFileSync(
+          resolveTrailPath(date),
+          `\n## Dig (ABORTED): ${QUERY}\n_${new Date().toISOString()} | ` +
+          `${partial.completed_searches}/${partial.total_searches} searches | ${sig}_\n\n---\n\n`
+        );
+      } catch { /* trail append is best-effort on the abort path */ }
+    }
+    // SKP-002: process.exit does NOT flush async stdout — write SYNCHRONOUSLY
+    // to fd 1 so a large partial artifact is fully on the wire before exit.
+    writeSync(1, JSON.stringify(partial) + "\n");
+    process.exit(sig === "SIGTERM" ? 143 : 130);
+  };
+}
+process.on("SIGINT", onSignal("SIGINT"));
+process.on("SIGTERM", onSignal("SIGTERM"));
+
+// Entry point: --scout routes to the breadth primitive, else the deep dig.
+const entry = SCOUT ? scout : dig;
+entry().catch((err) => {
   console.log(
     JSON.stringify({
       error: String(err),

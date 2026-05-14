@@ -28,6 +28,24 @@ A k-hole is chosen. You look at the threshold, understand what going in means, a
 
 These aren't research queries. They're invitations to depth. The phrasing is already half-synthesized — someone who types this already knows the direction. The construct follows the pull.
 
+## The Four Primitives
+
+`/dig` is one clear entry point — `scripts/dig-search.ts` — and everything it
+does is one of **four primitives**:
+
+| Primitive | What it is | Driven by |
+|-----------|-----------|-----------|
+| **breadth** | a fast wide shallow pass — "is this question pointed at the right *space*?" | `--scout` |
+| **depth** | intentional descent into one thread, N angles deep | `--depth <0-4>`, `--stream`, SIGINT/SIGTERM abort-with-partial |
+| **pulling-threads** | a dig's surfaced threads become the next dig's seeds — the loop | `--envelopes` (consume), auto-emit on `--trail` |
+| **resonance** | how strongly a reference/thread grounds a direction | `--resonance`, the creative-resonance-envelope |
+
+The full machine-readable surface — every flag, the flag-combination matrix,
+output shapes, exit codes — is the published contract at
+**`schemas/dig-surface.schema.json`**. Run `dig-search.ts --print-contract` to
+emit it, or `--help` for the human summary. A human or an agent can drive the
+tool from the contract alone, with zero source-reading.
+
 ## Two Ways to Play
 
 This construct has two modes. They serve different human states. Choose the strategy that works for how you learn.
@@ -57,6 +75,26 @@ Each `/dig` invocation:
 5. The user picks a thread. `/dig` again. Deeper.
 
 Each dig inherits context from every previous dig in the session. The cumulative trail means the agent can build on prior findings, avoid re-covering ground, and notice patterns emerging across the descent.
+
+### --scout — the breadth check before the descent
+
+Before committing 5–25 minutes to a deep dig, `--scout` runs one fast shallow
+pass: a source list + a one-line gist per source, no synthesis, in seconds. It
+answers *"is this question pointed at the right space?"* — so you can refine the
+phrasing cheaply instead of discovering a wrong question 20 minutes in.
+
+```
+npx tsx scripts/dig-search.ts --query "your thread" --scout
+```
+
+It is a single search call — it does not decompose a multi-faceted question the
+way a depth-N dig does. Scout answers "right *space*?", not "right *facets*?".
+`--scout` and `--depth N` are mutually exclusive.
+
+> *(Phase 1 introduces `--scout` as the **breadth** primitive. The four
+> primitives — breadth · depth · pulling-threads · resonance — and the single
+> surface contract are documented in `schemas/dig-surface.schema.json` once S7
+> lands.)*
 
 ## Workflow
 

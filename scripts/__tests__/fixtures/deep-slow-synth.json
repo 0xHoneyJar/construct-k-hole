@@ -1,0 +1,21 @@
+{
+  "practitioners and researchers": {
+    "__delay_ms": 150,
+    "text": "Fast search 1 done.",
+    "sources": [{ "title": "S1", "uri": "https://example.com/s1" }],
+    "supports": [{ "text": "snippet 1", "sourceIndices": [0] }],
+    "webSearchQueries": ["q1"]
+  },
+  "fields outside of": {
+    "__delay_ms": 150,
+    "text": "Fast search 2 done.",
+    "sources": [{ "title": "S2", "uri": "https://example.com/s2" }],
+    "supports": [{ "text": "snippet 2", "sourceIndices": [0] }],
+    "webSearchQueries": ["q2"]
+  },
+  "__synthesis": {
+    "__delay_ms": 9000,
+    "text": "### Findings\n- synthesis hangs, never reached before the signal",
+    "sources": [], "supports": [], "webSearchQueries": []
+  }
+}
