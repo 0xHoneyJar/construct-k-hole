@@ -1519,11 +1519,11 @@ function planSearchQueries(
 // surface/notable/deep/profound — rateDepth() actually returns these symbols.
 function depthRatingToStrength(rating: string): number {
   const table: Record<string, number> = {
-    "−": 0.3, // −   score 0
-    "±": 0.45, // ±  score 1
-    "+": 0.6, //          score 2
-    "++": 0.8, //         score 3
-    "+++": 0.95, //       score 4
+    "−": 0.3,    // rateDepth score 0
+    "±": 0.45,   // rateDepth score 1
+    "+": 0.6,    // rateDepth score 2
+    "++": 0.8,   // rateDepth score 3
+    "+++": 0.95, // rateDepth score 4
   };
   if (rating in table) return table[rating];
   process.stderr.write(`[dig] depthRatingToStrength: unknown rating "${rating}" — defaulting to 0.30\n`);
@@ -2064,7 +2064,8 @@ async function dig() {
   // FR-2: --stream → the final result is the terminal `complete` NDJSON event
   // (payload identical to the non-stream blob). Otherwise → today's single blob.
   if (STREAM) {
-    emitEvent({ event: "complete", ...output });
+    // `event` last so it always wins, even if `output` ever gains an `event` key.
+    emitEvent({ ...output, event: "complete" });
   } else {
     console.log(JSON.stringify(output, null, 2));
   }

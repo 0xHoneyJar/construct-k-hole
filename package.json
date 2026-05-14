@@ -4,6 +4,9 @@
   "private": true,
   "type": "module",
   "description": "Dev/test harness for construct-k-hole pipeline scripts (dig-search.ts and siblings). Not published — the construct itself is the product; this package.json exists so `tsc` resolves .ts as ESM (fixes the pre-existing import.meta error) and so the test suite has a runner.",
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "test": "node --import tsx --test scripts/__tests__/*.test.ts",
     "typecheck": "tsc --noEmit --esModuleInterop --module nodenext --moduleResolution nodenext --target es2022 scripts/dig-search.ts"
