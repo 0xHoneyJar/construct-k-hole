@@ -58,6 +58,26 @@ Each `/dig` invocation:
 
 Each dig inherits context from every previous dig in the session. The cumulative trail means the agent can build on prior findings, avoid re-covering ground, and notice patterns emerging across the descent.
 
+### --scout — the breadth check before the descent
+
+Before committing 5–25 minutes to a deep dig, `--scout` runs one fast shallow
+pass: a source list + a one-line gist per source, no synthesis, in seconds. It
+answers *"is this question pointed at the right space?"* — so you can refine the
+phrasing cheaply instead of discovering a wrong question 20 minutes in.
+
+```
+npx tsx scripts/dig-search.ts --query "your thread" --scout
+```
+
+It is a single search call — it does not decompose a multi-faceted question the
+way a depth-N dig does. Scout answers "right *space*?", not "right *facets*?".
+`--scout` and `--depth N` are mutually exclusive.
+
+> *(Phase 1 introduces `--scout` as the **breadth** primitive. The four
+> primitives — breadth · depth · pulling-threads · resonance — and the single
+> surface contract are documented in `schemas/dig-surface.schema.json` once S7
+> lands.)*
+
 ## Workflow
 
 ### Step 1: Accept the Thread

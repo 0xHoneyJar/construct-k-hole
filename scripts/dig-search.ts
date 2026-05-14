@@ -11,9 +11,19 @@
  *   npx tsx scripts/dig-search.ts --query "your thread" --depth 3
  *   npx tsx scripts/dig-search.ts --query "your thread" --depth 0 --trail path/to/trail.md
  *   npx tsx scripts/dig-search.ts --query "your thread" --model gemini-2.5-pro
+ *   npx tsx scripts/dig-search.ts --query "your thread" --scout
  *
- * Output: JSON to stdout (findings, sources, pull threads)
- * Side effect: appends to dig session trail file
+ * BREADTH primitive — --scout:
+ *   A fast, wide, shallow pass: one search, NO synthesis, source list + a
+ *   one-line gist per source. Answers "is this question pointed at the right
+ *   space?" in seconds, before committing a deep run. It is a single search
+ *   call — it does NOT decompose a multi-faceted question the way a depth-N
+ *   dig does; scout answers "right space?", not "right facets?". --scout and
+ *   --depth N are mutually exclusive.
+ *
+ * Output: JSON to stdout (deep dig: findings/sources/pull-threads · scout:
+ *   mode:"scout" + sources with gist + gist_quality)
+ * Side effect: deep dig appends to the trail file; scout has no side effects
  */
 
 import {
@@ -125,6 +135,12 @@ function getArg(name: string): string | null {
   return process.argv[idx + 1] ?? null;
 }
 
+// Boolean flag presence check (no value consumed). Used by --scout / --stream /
+// --no-emit-envelope (Phase 1 primitives).
+function getFlag(name: string): boolean {
+  return process.argv.includes(`--${name}`);
+}
+
 const QUERY = getArg("query");
 if (!QUERY) {
   console.log(
@@ -141,6 +157,24 @@ const SEARCH_DEPTH = Math.min(
   Math.max(parseInt(getArg("depth") || "2", 10), 0),
   4
 );
+
+// ─── BREADTH primitive: scout (FR-1) ─────────────────────────────
+// --scout is a fast, wide, shallow pass — one search, no synthesis, source
+// list + one-line gist per source. Answers "is this question pointed at the
+// right space?" before committing a deep run. --depth 0 is NOT reused (it is
+// already "Lilly's tank", synthesis-only); --scout is a distinct flag and is
+// mutually exclusive with an explicit --depth.
+const SCOUT = getFlag("scout");
+const DEPTH_EXPLICIT = process.argv.includes("--depth");
+if (SCOUT && DEPTH_EXPLICIT) {
+  console.log(
+    JSON.stringify({
+      error:
+        "--scout and --depth are mutually exclusive. --scout is a single shallow pass; --depth N is a deep dig.",
+    })
+  );
+  process.exit(2);
+}
 // Default: gemini-3-pro-preview (the gemini CLI resolves this to
 // gemini-3.1-pro-preview server-side — the current latest, per
 // https://deepmind.google/models/gemini/pro/). Pro-tier is required for
@@ -946,6 +980,27 @@ async function gemini(
     temperature?: number;
   }
 ): Promise<GeminiResponse> {
+  // ── Test seam (DIG_MOCK_PROVIDER) ──────────────────────────────
+  // When DIG_MOCK_PROVIDER points at a fixture file, return canned
+  // GeminiResponse data instead of calling a real provider. This is the
+  // gemini()-boundary mock the SDD §6 test design relies on — it lets the
+  // subprocess integration suite exercise the full real CLI path
+  // deterministically with zero API/subscription spend. Production never
+  // sets this env var. The fixture may be a single GeminiResponse, or a
+  // `{ "<query substring>": GeminiResponse }` map for per-query control.
+  const mockPath = process.env.DIG_MOCK_PROVIDER;
+  if (mockPath) {
+    const fixture = JSON.parse(readFileSync(mockPath, "utf-8"));
+    if (fixture && typeof fixture === "object" && !Array.isArray(fixture) && !("text" in fixture)) {
+      const key = Object.keys(fixture).find((k) => prompt.includes(k));
+      if (key) return fixture[key] as GeminiResponse;
+      // No keyed match → first entry as the default.
+      const first = Object.values(fixture)[0];
+      if (first) return first as GeminiResponse;
+    }
+    return fixture as GeminiResponse;
+  }
+
   const modelsToTry = [activeModel, ...DIG_FALLBACK_MODELS.filter(m => m !== activeModel)];
   let lastError = "";
 
@@ -1256,6 +1311,91 @@ async function synthesize(
   return result.text;
 }
 
+// ─── Scout (BREADTH primitive · FR-1) ────────────────────────────
+
+type GistQuality = "grounded" | "text-matched" | "title-only";
+
+// Cross-provider gist extraction. `supports[].text` grounding metadata is
+// specific to the Gemini REST route; the CLI and OpenRouter routes may not
+// return it. Three-tier precedence, applied per source — and the tier that
+// fired is disclosed via `gist_quality` so the caller knows the gist's
+// provenance rather than seeing silent degradation.
+function extractGist(
+  source: { title: string; uri: string },
+  sourceIndex: number,
+  result: GeminiResponse
+): { gist: string; gist_quality: GistQuality } {
+  // Tier 1 — REST grounding metadata cites this source index.
+  const support = result.supports.find((s) =>
+    s.sourceIndices.includes(sourceIndex)
+  );
+  if (support?.text?.trim()) {
+    return { gist: support.text.trim().slice(0, 200), gist_quality: "grounded" };
+  }
+  // Tier 2 — scan the response prose for a sentence naming this source.
+  let needle = source.title;
+  try {
+    needle = new URL(source.uri).hostname.replace(/^www\./, "");
+  } catch {
+    /* keep title as needle */
+  }
+  const sentences = (result.text || "").split(/(?<=[.!?])\s+/);
+  const hit = sentences.find(
+    (s) =>
+      (source.title && s.includes(source.title)) || (needle && s.includes(needle))
+  );
+  if (hit?.trim()) {
+    return { gist: hit.trim().slice(0, 200), gist_quality: "text-matched" };
+  }
+  // Tier 3 — nothing groundable.
+  return {
+    gist: `${source.title} (no snippet — provider returned no groundable text)`,
+    gist_quality: "title-only",
+  };
+}
+
+// One search, no synthesis, no trail, no envelope emission. The BREADTH
+// primitive: validate a question's direction in seconds before a deep run.
+async function scout() {
+  const startTime = Date.now();
+  process.stderr.write(`[dig] Scout: "${QUERY}" | Model: ${activeModel}\n`);
+
+  const result = await gemini(QUERY!, {
+    search: true,
+    maxTokens: 2048,
+    temperature: 0.0,
+  });
+
+  // Dedupe sources — mirror dig()'s vertex-redirect handling.
+  const deduped = [
+    ...new Map(result.sources.map((s) => [s.uri, s])).values(),
+  ].filter((s) => s.uri.startsWith("http"));
+  const nonVertex = deduped.filter(
+    (s) => !s.uri.includes("vertexaisearch.cloud.google.com")
+  );
+  const uniqueSources = nonVertex.length > 0 ? nonVertex : deduped;
+
+  const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+  process.stderr.write(
+    `[dig] Scout done in ${elapsed}s | ${uniqueSources.length} sources\n`
+  );
+
+  const output = {
+    mode: "scout",
+    query: QUERY,
+    sources: uniqueSources.map((s) => {
+      const origIndex = result.sources.findIndex((o) => o.uri === s.uri);
+      const { gist, gist_quality } = extractGist(s, origIndex, result);
+      return { title: s.title, url: s.uri, gist, gist_quality };
+    }),
+    source_count: uniqueSources.length,
+    elapsed_s: elapsed,
+    note: "scout pass — direction check only, not a deep result",
+  };
+
+  console.log(JSON.stringify(output, null, 2));
+}
+
 // ─── Main ────────────────────────────────────────────────────────
 
 async function dig() {
@@ -1390,7 +1530,9 @@ async function dig() {
   console.log(JSON.stringify(output, null, 2));
 }
 
-dig().catch((err) => {
+// Entry point: --scout routes to the breadth primitive, else the deep dig.
+const entry = SCOUT ? scout : dig;
+entry().catch((err) => {
   console.log(
     JSON.stringify({
       error: String(err),
