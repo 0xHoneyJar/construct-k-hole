@@ -1,0 +1,15 @@
+{
+  "practitioners and researchers": {
+    "text": "Search 1 succeeded: practitioner findings here.",
+    "sources": [{ "title": "Practitioner Source", "uri": "https://example.com/prac" }],
+    "supports": [{ "text": "A practitioner snippet.", "sourceIndices": [0] }],
+    "webSearchQueries": ["practitioners query"]
+  },
+  "fields outside of": { "__error": "simulated provider outage" },
+  "__synthesis": {
+    "text": "### Findings\n- One finding survived the partial search set.\n\n### Pull Threads\n- a thread to pull",
+    "sources": [],
+    "supports": [],
+    "webSearchQueries": []
+  }
+}

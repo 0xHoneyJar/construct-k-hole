@@ -12,6 +12,15 @@
  *   npx tsx scripts/dig-search.ts --query "your thread" --depth 0 --trail path/to/trail.md
  *   npx tsx scripts/dig-search.ts --query "your thread" --model gemini-2.5-pro
  *   npx tsx scripts/dig-search.ts --query "your thread" --scout
+ *   npx tsx scripts/dig-search.ts --query "your thread" --depth 3 --stream
+ *
+ * DEPTH visibility — --stream:
+ *   Turns stdout into NDJSON — one `search` (or `search_error`) event per
+ *   completed search, plus a terminal `complete` event whose payload is the
+ *   full output object. Without --stream, stdout is the single JSON blob,
+ *   unchanged. Human progress lines stay on stderr in both modes. A failed
+ *   provider call no longer collapses the dig — it becomes a search_error and
+ *   the dig continues with the surviving searches (`failed_searches` counts them).
  *
  * BREADTH primitive — --scout:
  *   A fast, wide, shallow pass: one search, NO synthesis, source list + a
@@ -28,6 +37,7 @@
 
 import {
   readFileSync,
+  writeFileSync,
   mkdirSync,
   existsSync,
   appendFileSync,
@@ -174,6 +184,46 @@ if (SCOUT && DEPTH_EXPLICIT) {
     })
   );
   process.exit(2);
+}
+
+// ─── DEPTH visibility: streaming (FR-2) ──────────────────────────
+// --stream turns stdout into NDJSON — one event per completed/failed search,
+// plus a terminal `complete` event whose payload is the full output object.
+// Absent → today's single-blob stdout, unchanged. --stream gates only the
+// *emit*; the accumulator below is populated unconditionally.
+const STREAM = getFlag("stream");
+
+// A search either resolves to a SearchResult or fails. `query_index` is the
+// stable definition-order index (NOT completion order — completion order is
+// implicit in stream line arrival).
+type SearchResult = {
+  query: string;
+  text: string;
+  sources: { title: string; uri: string }[];
+  supports: { text: string; sourceIndices: number[] }[];
+  webSearchQueries: string[];
+};
+type SettledSearch =
+  | { status: "ok"; query_index: number; result: SearchResult }
+  | { status: "error"; query_index: number; query: string; error: string };
+
+// FR-2 + FR-3: the search accumulator. Populated by the settle-handler on
+// EVERY run (not --stream-gated — SKP-001a) so FR-3's SIGINT handler can flush
+// whatever completed even on the common non-streaming path. Reset at the top
+// of each dig() (module-level state must not bleed across runs — tests run
+// many digs in one process).
+let accumulator: SettledSearch[] = [];
+
+// Test-only observability hook (SDD §6 / IMP-014). The subprocess suite reads
+// the accumulator via the DIG_DUMP_STATE env seam; this export is for the
+// in-process unit tests that S8's dig-lib.ts extraction will enable.
+export function __getAccumulator(): SettledSearch[] {
+  return accumulator;
+}
+
+// FR-2: structured stream event — one NDJSON line on stdout.
+function emitEvent(evt: Record<string, unknown>): void {
+  process.stdout.write(JSON.stringify(evt) + "\n");
 }
 // Default: gemini-3-pro-preview (the gemini CLI resolves this to
 // gemini-3.1-pro-preview server-side — the current latest, per
@@ -986,19 +1036,39 @@ async function gemini(
   // gemini()-boundary mock the SDD §6 test design relies on — it lets the
   // subprocess integration suite exercise the full real CLI path
   // deterministically with zero API/subscription spend. Production never
-  // sets this env var. The fixture may be a single GeminiResponse, or a
-  // `{ "<query substring>": GeminiResponse }` map for per-query control.
+  // sets this env var.
+  //
+  // Fixture forms:
+  //   • a single GeminiResponse           — returned for every call
+  //   • a keyed map { "<key>": value }    — `value` is a GeminiResponse, or
+  //     { "__error": "msg" } to make that call THROW (tests the search_error
+  //     path). Key resolution: search calls (opts.search) match the first key
+  //     whose substring is in the prompt; synthesis calls (no opts.search)
+  //     use "__synthesis"; "__default" is the fallback for either.
   const mockPath = process.env.DIG_MOCK_PROVIDER;
   if (mockPath) {
     const fixture = JSON.parse(readFileSync(mockPath, "utf-8"));
-    if (fixture && typeof fixture === "object" && !Array.isArray(fixture) && !("text" in fixture)) {
-      const key = Object.keys(fixture).find((k) => prompt.includes(k));
-      if (key) return fixture[key] as GeminiResponse;
-      // No keyed match → first entry as the default.
-      const first = Object.values(fixture)[0];
-      if (first) return first as GeminiResponse;
+    const resolveMock = (): unknown => {
+      if (!fixture || typeof fixture !== "object" || Array.isArray(fixture) || "text" in fixture) {
+        return fixture; // single-GeminiResponse form
+      }
+      if (opts?.search) {
+        const key = Object.keys(fixture).find(
+          (k) => !k.startsWith("__") && prompt.includes(k)
+        );
+        if (key) return fixture[key];
+      } else if ("__synthesis" in fixture) {
+        return fixture["__synthesis"];
+      }
+      if ("__default" in fixture) return fixture["__default"];
+      const firstReal = Object.entries(fixture).find(([k]) => !k.startsWith("__"));
+      return firstReal ? firstReal[1] : fixture;
+    };
+    const picked = resolveMock();
+    if (picked && typeof picked === "object" && "__error" in (picked as object)) {
+      throw new Error(String((picked as { __error: unknown }).__error));
     }
-    return fixture as GeminiResponse;
+    return picked as GeminiResponse;
   }
 
   const modelsToTry = [activeModel, ...DIG_FALLBACK_MODELS.filter(m => m !== activeModel)];
@@ -1400,6 +1470,7 @@ async function scout() {
 
 async function dig() {
   const startTime = Date.now();
+  accumulator = []; // SKP-001a: module-level state must not bleed across runs.
   const resonance = loadResonance();
   const trail = loadTrail();
 
@@ -1410,13 +1481,9 @@ async function dig() {
   if (trail) process.stderr.write(`[dig] Trail context loaded\n`);
 
   // Phase: Search (skip at depth 0 — Lilly's tank)
-  type SearchResult = {
-    query: string; text: string;
-    sources: { title: string; uri: string }[];
-    supports: { text: string; sourceIndices: number[] }[];
-    webSearchQueries: string[];
-  };
+  // SearchResult / SettledSearch and `accumulator` are module-level (FR-2/FR-3).
   let searches: SearchResult[] = [];
+  let failedSearches = 0;
 
   if (SEARCH_DEPTH === 0) {
     process.stderr.write(`[dig] Depth 0: tank mode \u2014 synthesizing from trail + resonance only\n`);
@@ -1424,25 +1491,76 @@ async function dig() {
     const queries = buildSearchQueries(QUERY, SEARCH_DEPTH);
     process.stderr.write(`[dig] Running ${queries.length} search(es) in parallel...\n`);
 
-    searches = await Promise.all(
-      queries.map(async (query, i) => {
-        const result = await gemini(query, {
-          search: true,
-          maxTokens: 4096,
-          temperature: 0.0,
-        });
-        process.stderr.write(
-          `[dig] Search ${i + 1}/${queries.length}: ${result.sources.length} sources, ${result.webSearchQueries.length} web queries\n`
-        );
-        return {
-          query,
-          text: result.text,
-          sources: result.sources,
-          supports: result.supports,
-          webSearchQueries: result.webSearchQueries,
-        };
+    // allSettled semantics (IMP-002): each task self-handles its own failure
+    // and never rejects, so one bad provider call cannot collapse the dig.
+    // Each task, AS IT SETTLES: (1) pushes to the accumulator UNCONDITIONALLY
+    // (SKP-001a — FR-3's escape hatch depends on this), (2) emits one NDJSON
+    // line if --stream.
+    const settled: SettledSearch[] = await Promise.all(
+      queries.map(async (query, i): Promise<SettledSearch> => {
+        const t0 = Date.now();
+        try {
+          const result = await gemini(query, {
+            search: true,
+            maxTokens: 4096,
+            temperature: 0.0,
+          });
+          process.stderr.write(
+            `[dig] Search ${i + 1}/${queries.length}: ${result.sources.length} sources, ${result.webSearchQueries.length} web queries\n`
+          );
+          const entry: SettledSearch = {
+            status: "ok",
+            query_index: i,
+            result: {
+              query,
+              text: result.text,
+              sources: result.sources,
+              supports: result.supports,
+              webSearchQueries: result.webSearchQueries,
+            },
+          };
+          accumulator.push(entry);
+          if (STREAM) {
+            emitEvent({
+              event: "search",
+              query_index: i,
+              of: queries.length,
+              query,
+              source_count: result.sources.length,
+              elapsed_ms: Date.now() - t0,
+            });
+          }
+          return entry;
+        } catch (err) {
+          const error = String(err);
+          process.stderr.write(
+            `[dig] Search ${i + 1}/${queries.length} FAILED: ${error.slice(0, 80)}\n`
+          );
+          const entry: SettledSearch = {
+            status: "error",
+            query_index: i,
+            query,
+            error,
+          };
+          accumulator.push(entry);
+          if (STREAM) {
+            emitEvent({
+              event: "search_error",
+              query_index: i,
+              of: queries.length,
+              query,
+              error,
+            });
+          }
+          return entry;
+        }
       })
     );
+
+    searches = settled
+      .filter((s): s is Extract<SettledSearch, { status: "ok" }> => s.status === "ok")
+      .map((s) => s.result);
+    failedSearches = settled.length - searches.length;
   }
 
   // Deduplicate sources. The REST grounded-search path returns groundingChunks
@@ -1521,13 +1639,29 @@ async function dig() {
     })),
     source_count: uniqueSources.length,
     search_count: searches.length,
+    failed_searches: failedSearches,
     web_search_queries: allWebSearchQueries,
     had_resonance: !!resonance,
     had_trail: !!trail,
     trail_file: trailFile,
   };
 
-  console.log(JSON.stringify(output, null, 2));
+  // FR-2: --stream → the final result is the terminal `complete` NDJSON event
+  // (payload identical to the non-stream blob). Otherwise → today's single blob.
+  if (STREAM) {
+    emitEvent({ event: "complete", ...output });
+  } else {
+    console.log(JSON.stringify(output, null, 2));
+  }
+
+  // Test-only state dump (DIG_DUMP_STATE env seam, SDD §6 / IMP-014) — lets the
+  // subprocess suite assert the accumulator was populated on the non-stream path.
+  if (process.env.DIG_DUMP_STATE) {
+    writeFileSync(
+      process.env.DIG_DUMP_STATE,
+      JSON.stringify({ accumulator, failed_searches: failedSearches })
+    );
+  }
 }
 
 // Entry point: --scout routes to the breadth primitive, else the deep dig.
