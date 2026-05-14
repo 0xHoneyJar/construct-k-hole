@@ -3,3 +3,16 @@ node_modules/
 scripts/research-output/
 *.log
 .DS_Store
+
+# Loa framework — runtime state & generated content (not source of truth)
+.run/
+__pycache__/
+*.pyc
+grimoires/loa/a2a/
+.claude/constructs/
+.claude/overrides/
+
+# NOTE: the Loa mount (commit 27e51fb) also committed ~500 pack-synced files
+# under .claude/commands/ and .claude/skills/ that sync-packs.sh regenerates
+# per-environment. Those are tracked-but-arguably-shouldn't-be; flagged in the
+# PR description for an operator call (a `git rm --cached` cleanup decision).
