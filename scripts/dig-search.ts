@@ -73,6 +73,7 @@ import { fileURLToPath } from "url";
 import { spawn, spawnSync, type ChildProcess } from "child_process";
 import { tmpdir } from "os";
 import { createHash } from "crypto";
+import { classifyCliRateLimit, classifyRestHttpError } from "./lib/provider-errors.js";
 
 // ─── Config ─────────────────────────────────────────────────────
 
@@ -356,6 +357,9 @@ interface GeminiResponse {
 type GeminiCallResult =
   | { status: "success"; response: GeminiResponse }
   | { status: "model_not_found"; error: string }
+  // Provider-wide quota window — transient, but NOT worth cascading the whole
+  // model fallback chain on (all models share the one subscription quota).
+  | { status: "rate_limited"; error: string; retryDelayMs?: number }
   | { status: "error"; error: string };
 
 function isModelNotFound(status: number, body: string): boolean {
@@ -426,6 +430,14 @@ async function geminiCall(
             await new Promise((r) => setTimeout(r, wait));
             continue;
           }
+        }
+
+        // construct-k-hole#24 (bug #2): a 403 PERMISSION_DENIED is a
+        // project-level access denial, not transient — surface the ops action
+        // (re-enable / re-point the key) instead of dumping the raw 403 body.
+        const restError = classifyRestHttpError(res.status, errText);
+        if (restError) {
+          return { status: "error", error: restError };
         }
 
         return { status: "error", error: `Gemini ${res.status}: ${errText.slice(0, 200)}` };
@@ -776,9 +788,12 @@ async function geminiCliCall(
   let lastResult: GeminiCallResult = { status: "error", error: "no attempts ran" };
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     lastResult = await geminiCliCallOnce(model, prompt, opts);
-    // Success and "model_not_found" are both terminal — no point retrying.
+    // Success, "model_not_found", and "rate_limited" are all terminal — no
+    // point retrying. A rate-limit window is provider-wide and minutes-long
+    // (construct-k-hole#24): a 15s backoff retry just hits the same quota wall.
     if (lastResult.status === "success") return lastResult;
     if (lastResult.status === "model_not_found") return lastResult;
+    if (lastResult.status === "rate_limited") return lastResult;
 
     // Only retry on retry-shaped errors: timeouts and 5xx-class transient
     // failures. Substantive errors (auth, malformed prompt, etc.) should fail
@@ -973,6 +988,23 @@ async function geminiCliCallOnce(
         }
       }
 
+      // construct-k-hole#24 (bug #1): when the CLI exits non-zero (or returns a
+      // structured error), check FIRST for a rate-limit / quota response. The
+      // CLI emits a nested `[Object]` object with a `retryDelayMs` field that
+      // is often NOT cleanly JSON-extractable from stdout — without this branch
+      // the generic handlers below dump the truncated `[Object]` fragment raw.
+      if (code !== 0 || parsed?.error) {
+        const rateLimit = classifyCliRateLimit(stderr, stripped);
+        if (rateLimit) {
+          resolveOnce({
+            status: "rate_limited",
+            error: `${cliModel}: ${rateLimit.message}`,
+            retryDelayMs: rateLimit.retryDelayMs,
+          });
+          return;
+        }
+      }
+
       if (parsed?.error) {
         const errMsg = typeof parsed.error === "string"
           ? parsed.error
@@ -1058,6 +1090,11 @@ async function searchCall(
   // preview names the REST API and CLI carry natively (and vice versa).
   let sawModelNotFound = false;
   let lastError = "";
+  // construct-k-hole#24: track a provider-wide rate-limit window separately —
+  // it's the most actionable failure signal, so it's surfaced ahead of a
+  // generic error when no provider succeeded.
+  let sawRateLimited = false;
+  let rateLimitError = "";
 
   // Fail-fast when no provider is configured at all (closes bridgebuilder F1).
   // The router will still produce a structured error downstream, but bailing
@@ -1075,28 +1112,37 @@ async function searchCall(
     const result = await geminiCliCall(model, prompt, opts);
     if (result.status === "success") return result;
     if (result.status === "model_not_found") sawModelNotFound = true;
+    if (result.status === "rate_limited") { sawRateLimited = true; rateLimitError = result.error; }
     lastError = result.error;
     process.stderr.write(
-      `[dig] Gemini CLI ${result.status === "model_not_found" ? "lacks model" : "failed"} (${result.error.slice(0, 80)}), trying next provider...\n`,
+      `[dig] Gemini CLI ${result.status === "model_not_found" ? "lacks model" : result.status === "rate_limited" ? "rate-limited" : "failed"} (${result.error.slice(0, 80)}), trying next provider...\n`,
     );
   }
   if (USE_OPENROUTER) {
     const result = await openrouterCall(model, prompt, opts);
     if (result.status === "success") return result;
     if (result.status === "model_not_found") sawModelNotFound = true;
+    if (result.status === "rate_limited") { sawRateLimited = true; rateLimitError = result.error; }
     lastError = result.error;
     process.stderr.write(
-      `[dig] OpenRouter ${result.status === "model_not_found" ? "lacks model" : "failed"} (${result.error.slice(0, 60)}), trying next provider...\n`,
+      `[dig] OpenRouter ${result.status === "model_not_found" ? "lacks model" : result.status === "rate_limited" ? "rate-limited" : "failed"} (${result.error.slice(0, 60)}), trying next provider...\n`,
     );
   }
   if (GEMINI_KEY) {
     const result = await geminiCall(model, prompt, opts);
     if (result.status === "success") return result;
     if (result.status === "model_not_found") sawModelNotFound = true;
+    if (result.status === "rate_limited") { sawRateLimited = true; rateLimitError = result.error; }
     lastError = result.error;
     process.stderr.write(
-      `[dig] Gemini REST ${result.status === "model_not_found" ? "lacks model" : "failed"} (${result.error.slice(0, 60)})\n`,
+      `[dig] Gemini REST ${result.status === "model_not_found" ? "lacks model" : result.status === "rate_limited" ? "rate-limited" : "failed"} (${result.error.slice(0, 60)})\n`,
     );
+  }
+  // construct-k-hole#24: a rate-limit window is the most actionable failure —
+  // surface it ahead of a generic error so the operator sees "retry in ~Nm"
+  // rather than "all providers exhausted".
+  if (sawRateLimited) {
+    return { status: "rate_limited", error: rateLimitError };
   }
   if (sawModelNotFound) {
     return { status: "model_not_found", error: lastError || `${model} not available on any configured provider` };
@@ -1189,6 +1235,14 @@ async function gemini(
     if (result.status === "model_not_found") {
       process.stderr.write(`[dig] Model ${model} not found, continuing fallback chain...\n`);
       continue;
+    }
+
+    // construct-k-hole#24: a rate-limit is provider-wide — every model in the
+    // fallback chain shares the one subscription quota, so trying the next
+    // model just hits the same wall. Stop now and surface the clean message.
+    if (result.status === "rate_limited") {
+      process.stderr.write(`[dig] Rate-limited — provider quota is shared across all models, not trying the rest of the chain\n`);
+      throw new Error(result.error);
     }
 
     // Transient error after retries exhausted — also try next model
