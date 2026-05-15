@@ -35,13 +35,21 @@ export function classifyCliRateLimit(
 ): CliRateLimit | null {
   const haystack = `${stderr}\n${stdout}`;
   const lower = haystack.toLowerCase();
-  const isRateLimit =
+  // Strong, unambiguous signals — any one is sufficient.
+  const strongSignal =
     lower.includes("retrydelayms") ||
     lower.includes("resource_exhausted") ||
-    lower.includes("ratelimitexceeded") ||
-    lower.includes("rate limit") ||
-    lower.includes("quota") ||
-    /\b429\b/.test(haystack);
+    lower.includes("ratelimitexceeded");
+  // Weaker signals — a lone "quota" / "429" in a prompt echo or a stack-trace
+  // line (port number, hash fragment) must NOT trip the classifier, so two
+  // must co-occur before we treat the output as rate-limited.
+  const weakSignalCount = [
+    lower.includes("rate limit"),
+    lower.includes("quota"),
+    lower.includes("too many requests"),
+    /\b429\b/.test(haystack),
+  ].filter(Boolean).length;
+  const isRateLimit = strongSignal || weakSignalCount >= 2;
   if (!isRateLimit) return null;
 
   // retryDelayMs may be quoted or bare, `:` or `=` separated:
@@ -74,7 +82,10 @@ export function classifyRestHttpError(
   status: number,
   body: string,
 ): string | null {
-  if (status === 403 && body.toUpperCase().includes("PERMISSION_DENIED")) {
+  // Match the structured `"status": "PERMISSION_DENIED"` field, not a bare
+  // substring — a 403 body that merely quotes the phrase in free-form text
+  // (e.g. echoed user input) must not be reclassified.
+  if (status === 403 && /"status"\s*:\s*"PERMISSION_DENIED"/i.test(body)) {
     return (
       "Gemini REST: project access denied (PERMISSION_DENIED) — re-enable the " +
       "project or re-point GEMINI_API_KEY / GOOGLE_API_KEY to a working project"

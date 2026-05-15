@@ -31,8 +31,8 @@ test("#24 bug1 — CLI rate-limit fixture yields a clean retry-in-Nm message, no
 
   const result = classifyCliRateLimit(cliOutput, "");
   assert.ok(result, "a rate-limit response must be classified, not null");
-  // retryDelayMs: 2209585.91929 → ~37 minutes
-  assert.equal(result.retryMinutes, 37, "2209585.91929ms rounds to ~37m");
+  // 2209585.91929 ms / 60000 = 36.826… → Math.round → 37
+  assert.equal(result.retryMinutes, 37, "2209585.91929ms / 60000 = 36.826 → rounds to 37");
   assert.match(result.message, /rate-limited/i);
   assert.match(result.message, /~37m/, "message names the quota window");
   // The whole point of the bug fix: NO half-stringified object fragment.
@@ -68,6 +68,25 @@ test("#24 bug1 — a normal CLI error is NOT misclassified as rate-limited", () 
     null,
     "connection errors must fall through",
   );
+});
+
+// F3 (bridgebuilder review): weak signals must co-occur — a lone "quota" /
+// "429" / "rate limit" in a prompt echo or stack trace must not trip it.
+test("#24 bug1 — a single weak signal does NOT classify as rate-limited", () => {
+  assert.equal(
+    classifyCliRateLimit("the user asked about API quota limits", ""),
+    null,
+    "a lone 'quota' (e.g. echoed prompt text) must not classify",
+  );
+  assert.equal(
+    classifyCliRateLimit("listening on port 429", ""),
+    null,
+    "a lone '429' (e.g. a port number) must not classify",
+  );
+  // But two weak signals co-occurring is enough.
+  const two = classifyCliRateLimit("rate limit hit: HTTP 429", "");
+  assert.ok(two, "two weak signals co-occurring (rate limit + 429) classify");
+  assert.equal(two.retryMinutes, 0, "no retryDelayMs in this fixture → 0");
 });
 
 // ── Bug #2 — REST 403 PERMISSION_DENIED classification ─────────────

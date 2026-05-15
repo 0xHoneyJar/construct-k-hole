@@ -359,7 +359,7 @@ type GeminiCallResult =
   | { status: "model_not_found"; error: string }
   // Provider-wide quota window — transient, but NOT worth cascading the whole
   // model fallback chain on (all models share the one subscription quota).
-  | { status: "rate_limited"; error: string; retryDelayMs?: number }
+  | { status: "rate_limited"; error: string }
   | { status: "error"; error: string };
 
 function isModelNotFound(status: number, body: string): boolean {
@@ -999,7 +999,6 @@ async function geminiCliCallOnce(
           resolveOnce({
             status: "rate_limited",
             error: `${cliModel}: ${rateLimit.message}`,
-            retryDelayMs: rateLimit.retryDelayMs,
           });
           return;
         }
@@ -1092,7 +1091,11 @@ async function searchCall(
   let lastError = "";
   // construct-k-hole#24: track a provider-wide rate-limit window separately —
   // it's the most actionable failure signal, so it's surfaced ahead of a
-  // generic error when no provider succeeded.
+  // generic error when no provider succeeded. We still probe every configured
+  // provider after a rate-limit (CLI / OpenRouter / REST use distinct keys and
+  // projects — one being throttled says nothing about the others), so
+  // rateLimitError holds whichever provider was throttled last; that's fine,
+  // the message names its provider either way.
   let sawRateLimited = false;
   let rateLimitError = "";
 
