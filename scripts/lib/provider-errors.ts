@@ -35,21 +35,17 @@ export function classifyCliRateLimit(
 ): CliRateLimit | null {
   const haystack = `${stderr}\n${stdout}`;
   const lower = haystack.toLowerCase();
-  // Strong, unambiguous signals — any one is sufficient.
-  const strongSignal =
+  // Match ONLY on strong, unambiguous quota markers. Weaker phrases ("quota",
+  // "rate limit", a bare "429") were dropped after review: the CLI echoes the
+  // prompt on its error path, so a query *about* rate limits would
+  // false-positive. A genuine Gemini quota error always carries one of these
+  // three — RESOURCE_EXHAUSTED is the gRPC status, retryDelayMs is the
+  // RetryInfo — and output lacking all three is better served by the generic
+  // error path than by a guessed rate-limit framing.
+  const isRateLimit =
     lower.includes("retrydelayms") ||
     lower.includes("resource_exhausted") ||
     lower.includes("ratelimitexceeded");
-  // Weaker signals — a lone "quota" / "429" in a prompt echo or a stack-trace
-  // line (port number, hash fragment) must NOT trip the classifier, so two
-  // must co-occur before we treat the output as rate-limited.
-  const weakSignalCount = [
-    lower.includes("rate limit"),
-    lower.includes("quota"),
-    lower.includes("too many requests"),
-    /\b429\b/.test(haystack),
-  ].filter(Boolean).length;
-  const isRateLimit = strongSignal || weakSignalCount >= 2;
   if (!isRateLimit) return null;
 
   // retryDelayMs may be quoted or bare, `:` or `=` separated:
@@ -58,10 +54,17 @@ export function classifyCliRateLimit(
     /retrydelayms["']?\s*[:=]\s*([0-9]+(?:\.[0-9]+)?)/i,
   );
   const retryDelayMs = m ? Math.round(parseFloat(m[1])) : 0;
-  const retryMinutes =
-    retryDelayMs > 0 ? Math.max(1, Math.round(retryDelayMs / 60_000)) : 0;
-  const when =
-    retryMinutes > 0 ? `retry in ~${retryMinutes}m` : "retry later";
+  const retryMinutes = retryDelayMs > 0 ? Math.round(retryDelayMs / 60_000) : 0;
+  // Sub-minute waits surface as seconds — flooring a 5s delay to "~1m" would
+  // mislead the operator into waiting an order of magnitude too long.
+  let when: string;
+  if (retryDelayMs <= 0) {
+    when = "retry later";
+  } else if (retryDelayMs < 60_000) {
+    when = `retry in ~${Math.ceil(retryDelayMs / 1000)}s`;
+  } else {
+    when = `retry in ~${retryMinutes}m`;
+  }
   return {
     retryDelayMs,
     retryMinutes,

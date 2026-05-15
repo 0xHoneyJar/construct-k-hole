@@ -1089,13 +1089,11 @@ async function searchCall(
   // preview names the REST API and CLI carry natively (and vice versa).
   let sawModelNotFound = false;
   let lastError = "";
-  // construct-k-hole#24: track a provider-wide rate-limit window separately —
-  // it's the most actionable failure signal, so it's surfaced ahead of a
-  // generic error when no provider succeeded. We still probe every configured
-  // provider after a rate-limit (CLI / OpenRouter / REST use distinct keys and
-  // projects — one being throttled says nothing about the others), so
-  // rateLimitError holds whichever provider was throttled last; that's fine,
-  // the message names its provider either way.
+  // construct-k-hole#24: track the CLI's rate-limit window separately — it's
+  // the most actionable failure signal, so it's surfaced ahead of a generic
+  // error when no provider succeeded. Only the CLI path classifies
+  // rate_limited today (the REST / OpenRouter tiers surface quota as a generic
+  // error); the router still probes every configured provider regardless.
   let sawRateLimited = false;
   let rateLimitError = "";
 
@@ -1125,20 +1123,18 @@ async function searchCall(
     const result = await openrouterCall(model, prompt, opts);
     if (result.status === "success") return result;
     if (result.status === "model_not_found") sawModelNotFound = true;
-    if (result.status === "rate_limited") { sawRateLimited = true; rateLimitError = result.error; }
     lastError = result.error;
     process.stderr.write(
-      `[dig] OpenRouter ${result.status === "model_not_found" ? "lacks model" : result.status === "rate_limited" ? "rate-limited" : "failed"} (${result.error.slice(0, 60)}), trying next provider...\n`,
+      `[dig] OpenRouter ${result.status === "model_not_found" ? "lacks model" : "failed"} (${result.error.slice(0, 60)}), trying next provider...\n`,
     );
   }
   if (GEMINI_KEY) {
     const result = await geminiCall(model, prompt, opts);
     if (result.status === "success") return result;
     if (result.status === "model_not_found") sawModelNotFound = true;
-    if (result.status === "rate_limited") { sawRateLimited = true; rateLimitError = result.error; }
     lastError = result.error;
     process.stderr.write(
-      `[dig] Gemini REST ${result.status === "model_not_found" ? "lacks model" : result.status === "rate_limited" ? "rate-limited" : "failed"} (${result.error.slice(0, 60)})\n`,
+      `[dig] Gemini REST ${result.status === "model_not_found" ? "lacks model" : "failed"} (${result.error.slice(0, 60)})\n`,
     );
   }
   // construct-k-hole#24: a rate-limit window is the most actionable failure —
@@ -1240,9 +1236,11 @@ async function gemini(
       continue;
     }
 
-    // construct-k-hole#24: a rate-limit is provider-wide — every model in the
-    // fallback chain shares the one subscription quota, so trying the next
-    // model just hits the same wall. Stop now and surface the clean message.
+    // construct-k-hole#24: searchCall only returns rate_limited after it has
+    // already probed every configured provider (CLI / OpenRouter / REST), so
+    // by here the whole provider set is exhausted. Every model in the fallback
+    // chain shares that same provider set and the one subscription quota —
+    // trying the next model just hits the same wall. Stop and surface clean.
     if (result.status === "rate_limited") {
       process.stderr.write(`[dig] Rate-limited — provider quota is shared across all models, not trying the rest of the chain\n`);
       throw new Error(result.error);

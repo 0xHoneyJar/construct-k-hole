@@ -70,23 +70,38 @@ test("#24 bug1 — a normal CLI error is NOT misclassified as rate-limited", () 
   );
 });
 
-// F3 (bridgebuilder review): weak signals must co-occur — a lone "quota" /
-// "429" / "rate limit" in a prompt echo or stack trace must not trip it.
-test("#24 bug1 — a single weak signal does NOT classify as rate-limited", () => {
+// F2 (bridgebuilder review): only strong quota markers classify — weak
+// phrases must never trip it, even several together. The CLI echoes the
+// prompt on its error path, so a query *about* rate limits is a false-
+// positive vector.
+test("#24 bug1 — weak phrases never classify; only strong quota markers do", () => {
   assert.equal(
-    classifyCliRateLimit("the user asked about API quota limits", ""),
+    classifyCliRateLimit(
+      "the user asked about API quota and rate limit handling for HTTP 429",
+      "",
+    ),
     null,
-    "a lone 'quota' (e.g. echoed prompt text) must not classify",
+    "weak phrases — even several at once — must not classify",
   );
   assert.equal(
     classifyCliRateLimit("listening on port 429", ""),
     null,
     "a lone '429' (e.g. a port number) must not classify",
   );
-  // But two weak signals co-occurring is enough.
-  const two = classifyCliRateLimit("rate limit hit: HTTP 429", "");
-  assert.ok(two, "two weak signals co-occurring (rate limit + 429) classify");
-  assert.equal(two.retryMinutes, 0, "no retryDelayMs in this fixture → 0");
+  assert.ok(
+    classifyCliRateLimit("Error: RESOURCE_EXHAUSTED", ""),
+    "a strong quota marker classifies on its own",
+  );
+});
+
+// F3 (bridgebuilder review): sub-minute delays surface as seconds, not a
+// misleading "~1m" floor.
+test("#24 bug1 — sub-minute retryDelayMs surfaces as seconds, not floored to 1m", () => {
+  const short = classifyCliRateLimit("retryDelayMs: 5000, RESOURCE_EXHAUSTED", "");
+  assert.ok(short);
+  assert.equal(short.retryMinutes, 0, "5000ms rounds to 0 minutes — not floored to 1");
+  assert.match(short.message, /~5s/, "5000ms surfaces as ~5s");
+  assert.doesNotMatch(short.message, /~1m/, "must not mislead with a ~1m floor");
 });
 
 // ── Bug #2 — REST 403 PERMISSION_DENIED classification ─────────────
