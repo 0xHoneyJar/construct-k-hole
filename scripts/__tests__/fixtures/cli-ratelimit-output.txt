@@ -1,0 +1,4 @@
+gemini CLI exit 1: [Object], [Object] ]
+  },
+  retryDelayMs: 2209585.91929,
+  reason: 'RESOURCE_EXHAUSTED'
