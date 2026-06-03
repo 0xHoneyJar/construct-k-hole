@@ -198,7 +198,10 @@ if (getFlag("help")) {
     `                  --no-emit-envelope opt out of auto-emit (default: emit on --trail)\n` +
     `  RESONANCE       --resonance <p>    resonance profile weighting\n\n` +
     `  --query <thread>   (required)      --trail <p.md>   --model <name>\n` +
-    `  --print-contract   full machine-readable surface contract → stdout\n\n` +
+    `  --deadline-s <n>   soft internal deadline — synthesize early (default off)\n` +
+    `  --print-contract   full machine-readable surface contract → stdout\n` +
+    `  env: DIG_SEARCH_CONCURRENCY (default 1=serial · shared OAuth quota)\n` +
+    `       DIG_DEADLINE_S · DIG_RESOLVE_REDIRECTS=0 to keep vertex wrappers\n\n` +
     `Exit: 0 ok · 1 runtime error · 2 validation error · 130 SIGINT · 143 SIGTERM\n` +
     `Full contract: schemas/dig-surface.schema.json\n`
   );
@@ -246,6 +249,35 @@ if (SCOUT && DEPTH_EXPLICIT) {
 // Absent → today's single-blob stdout, unchanged. --stream gates only the
 // *emit*; the accumulator below is populated unconditionally.
 const STREAM = getFlag("stream");
+
+// Bounded search concurrency (partial-results fix). All grounded calls share
+// ONE gemini OAuth subscription quota, so the default is 1 (serial) — parallel
+// calls trigger 429 RESOURCE_EXHAUSTED + minutes-long internal CLI backoff that
+// blows past a caller's external `timeout`, producing the "aborted with partial
+// results" failure. Operators on a higher-quota REST/OpenRouter key (or who
+// accept the 429 risk) can raise it via DIG_SEARCH_CONCURRENCY. Clamped to
+// [1, 8]; a non-numeric / <1 value falls back to 1.
+const SEARCH_CONCURRENCY = (() => {
+  const raw = parseInt(process.env.DIG_SEARCH_CONCURRENCY || "1", 10);
+  if (!Number.isFinite(raw) || raw < 1) return 1;
+  return Math.min(raw, 8);
+})();
+
+// Internal soft-deadline (partial-results fix, second lever). A real grounded
+// search of the dig's heavy practitioner prompt runs ~100-160s on the pro tier
+// (4-7 chained google_web_search calls), so at depth ≥ 2 the cumulative search
+// phase can exceed a caller's external `timeout`. When that external SIGTERM
+// lands mid-search, the abort handler emits synthesis:null — useless. The soft
+// deadline lets the dig PROACTIVELY stop scheduling new searches once the
+// budget is nearly spent and synthesize from whatever already completed,
+// producing a NON-NULL result with real (partial) findings BEFORE the caller
+// kills it. 0 = disabled (default — preserves today's behavior for callers
+// that set a generous external budget). Set --deadline-s / DIG_DEADLINE_S to
+// just under your external `timeout` (e.g. external 240 → DIG_DEADLINE_S=210).
+const DEADLINE_S = (() => {
+  const raw = parseInt(getArg("deadline-s") || process.env.DIG_DEADLINE_S || "0", 10);
+  return Number.isFinite(raw) && raw > 0 ? raw : 0;
+})();
 
 // A search either resolves to a SearchResult or fails. `query_index` is the
 // stable definition-order index (NOT completion order — completion order is
@@ -749,6 +781,94 @@ function parseCliSources(text: string): { title: string; uri: string }[] {
   }
 
   return sources;
+}
+
+// Resolve Gemini grounded-search redirect wrappers
+// (`vertexaisearch.cloud.google.com/grounding-api-redirect/...`) to their real
+// destination URLs. Both the REST `groundingChunks` and the CLI `## Sources`
+// section surface these opaque wrappers, NOT the actual source URLs — a
+// consumer of the JSON output gets no extractable, dereferenceable source. We
+// follow the 30x (HEAD; manual redirect) and swap the wrapper for the
+// `Location` target, deriving a fresh hostname title. Best-effort: on timeout /
+// error / non-redirect we keep the wrapper untouched (it's still a clickable
+// link). Honors the module abortController so SIGINT/SIGTERM cancels in-flight
+// resolutions. Disable via DIG_RESOLVE_REDIRECTS=0; tune per-request timeout
+// via DIG_REDIRECT_TIMEOUT_MS (default 6000); bounded concurrency = 8.
+const RESOLVE_REDIRECTS = process.env.DIG_RESOLVE_REDIRECTS !== "0";
+const REDIRECT_TIMEOUT_MS = (() => {
+  const raw = parseInt(process.env.DIG_REDIRECT_TIMEOUT_MS || "6000", 10);
+  return Number.isFinite(raw) && raw > 0 ? raw : 6000;
+})();
+
+function isVertexRedirect(uri: string): boolean {
+  return uri.includes("vertexaisearch.cloud.google.com/grounding-api-redirect");
+}
+
+async function resolveOneRedirect(uri: string): Promise<string> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), REDIRECT_TIMEOUT_MS);
+  try {
+    // Manual redirect so we read the Location header rather than letting fetch
+    // chase it (some destinations are slow / block bots on a full GET).
+    let current = uri;
+    for (let hop = 0; hop < 5; hop++) {
+      const res = await fetch(current, {
+        method: "HEAD",
+        redirect: "manual",
+        signal: AbortSignal.any([controller.signal, abortController.signal]),
+      });
+      if (res.status >= 300 && res.status < 400) {
+        const loc = res.headers.get("location");
+        if (!loc) return current;
+        current = new URL(loc, current).toString();
+        if (!isVertexRedirect(current)) return current; // reached a real URL
+        continue; // chained redirect — keep following
+      }
+      // 2xx with no further redirect: `current` IS the resolved URL (rare for
+      // a HEAD against the wrapper, but treat it as terminal).
+      return current;
+    }
+    return current;
+  } catch {
+    return uri; // best-effort: keep the wrapper on any failure
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// Resolve a list of sources, rewriting vertex-redirect URIs to their real
+// destination (and re-deriving the title hostname). Non-redirect sources pass
+// through untouched. Bounded concurrency so a long source list can't open
+// dozens of sockets at once.
+async function resolveRedirectSources(
+  sources: { title: string; uri: string }[],
+): Promise<{ title: string; uri: string }[]> {
+  if (!RESOLVE_REDIRECTS) return sources;
+  const targets = sources.map((s) => isVertexRedirect(s.uri));
+  if (!targets.some(Boolean)) return sources;
+
+  const out = sources.slice();
+  let next = 0;
+  const lanes = Math.min(8, sources.length);
+  const worker = async (): Promise<void> => {
+    while (true) {
+      const i = next++;
+      if (i >= sources.length) return;
+      if (abortController.signal.aborted) return;
+      if (!targets[i]) continue;
+      const resolved = await resolveOneRedirect(sources[i].uri);
+      if (resolved !== sources[i].uri && !isVertexRedirect(resolved)) {
+        let title = out[i].title;
+        try {
+          title = new URL(resolved).hostname;
+        } catch { /* keep original title */ }
+        out[i] = { title, uri: resolved };
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.max(1, lanes) }, () => worker()));
+  // Re-dedupe by resolved URI — two wrappers can resolve to the same page.
+  return [...new Map(out.map((s) => [s.uri, s])).values()];
 }
 
 // Strip CLI prelude noise (skill-conflict chatter, ripgrep warning) from
@@ -1947,78 +2067,122 @@ async function dig() {
     const seeds = ENVELOPES_PATH ? loadEnvelopeSeeds(ENVELOPES_PATH) : [];
     const queries = planSearchQueries(QUERY!, SEARCH_DEPTH, seeds);
     totalPlannedSearches = queries.length; // FR-3: for the partial artifact's completed/total.
-    process.stderr.write(`[dig] Running ${queries.length} search(es) in parallel...\n`);
-
-    // allSettled semantics (IMP-002): each task self-handles its own failure
-    // and never rejects, so one bad provider call cannot collapse the dig.
-    // Each task, AS IT SETTLES: (1) pushes to the accumulator UNCONDITIONALLY
-    // (SKP-001a — FR-3's escape hatch depends on this), (2) emits one NDJSON
-    // line if --stream.
-    const settled: SettledSearch[] = await Promise.all(
-      queries.map(async (query, i): Promise<SettledSearch> => {
-        const t0 = Date.now();
-        try {
-          const result = await gemini(query, {
-            search: true,
-            maxTokens: 4096,
-            temperature: 0.0,
-          });
-          process.stderr.write(
-            `[dig] Search ${i + 1}/${queries.length}: ${result.sources.length} sources, ${result.webSearchQueries.length} web queries\n`
-          );
-          const entry: SettledSearch = {
-            status: "ok",
-            query_index: i,
-            result: {
-              query,
-              text: result.text,
-              sources: result.sources,
-              supports: result.supports,
-              webSearchQueries: result.webSearchQueries,
-            },
-          };
-          accumulator.push(entry);
-          if (STREAM) {
-            emitEvent({
-              event: "search",
-              query_index: i,
-              of: queries.length,
-              query,
-              source_count: result.sources.length,
-              elapsed_ms: Date.now() - t0,
-            });
-          }
-          return entry;
-        } catch (err) {
-          const error = String(err);
-          process.stderr.write(
-            `[dig] Search ${i + 1}/${queries.length} FAILED: ${error.slice(0, 80)}\n`
-          );
-          const entry: SettledSearch = {
-            status: "error",
-            query_index: i,
-            query,
-            error,
-          };
-          accumulator.push(entry);
-          if (STREAM) {
-            emitEvent({
-              event: "search_error",
-              query_index: i,
-              of: queries.length,
-              query,
-              error,
-            });
-          }
-          return entry;
-        }
-      })
+    process.stderr.write(
+      `[dig] Running ${queries.length} search(es), concurrency ${SEARCH_CONCURRENCY}...\n`
     );
 
+    // One search task: calls gemini, self-handles its own failure, NEVER
+    // rejects (IMP-002 allSettled semantics — one bad provider call cannot
+    // collapse the dig). AS IT SETTLES it (1) pushes to the accumulator
+    // UNCONDITIONALLY (SKP-001a — FR-3's escape hatch depends on this), and
+    // (2) emits one NDJSON line if --stream.
+    const runSearch = async (query: string, i: number): Promise<SettledSearch> => {
+      const t0 = Date.now();
+      try {
+        const result = await gemini(query, {
+          search: true,
+          maxTokens: 4096,
+          temperature: 0.0,
+        });
+        process.stderr.write(
+          `[dig] Search ${i + 1}/${queries.length}: ${result.sources.length} sources, ${result.webSearchQueries.length} web queries\n`
+        );
+        const entry: SettledSearch = {
+          status: "ok",
+          query_index: i,
+          result: {
+            query,
+            text: result.text,
+            sources: result.sources,
+            supports: result.supports,
+            webSearchQueries: result.webSearchQueries,
+          },
+        };
+        accumulator.push(entry);
+        if (STREAM) {
+          emitEvent({
+            event: "search",
+            query_index: i,
+            of: queries.length,
+            query,
+            source_count: result.sources.length,
+            elapsed_ms: Date.now() - t0,
+          });
+        }
+        return entry;
+      } catch (err) {
+        const error = String(err);
+        process.stderr.write(
+          `[dig] Search ${i + 1}/${queries.length} FAILED: ${error.slice(0, 80)}\n`
+        );
+        const entry: SettledSearch = {
+          status: "error",
+          query_index: i,
+          query,
+          error,
+        };
+        accumulator.push(entry);
+        if (STREAM) {
+          emitEvent({
+            event: "search_error",
+            query_index: i,
+            of: queries.length,
+            query,
+            error,
+          });
+        }
+        return entry;
+      }
+    };
+
+    // construct-k-hole partial-results fix: run with BOUNDED concurrency
+    // (default 1 = serial) instead of unbounded Promise.all. Every grounded
+    // call shares ONE gemini OAuth subscription quota; firing them all at once
+    // makes the CLI hit 429 RESOURCE_EXHAUSTED and burn minutes in its internal
+    // backoff. Two parallel calls under that contention regularly exceed a
+    // caller's external `timeout` budget → SIGTERM lands before any search
+    // settles → the abort handler emits `completed:0 … "aborted with partial
+    // results"`. Serial execution lets each call use the full quota, settle
+    // fast (no 429 storm), and keeps the cumulative wall-clock bounded so at
+    // least one search is on the wire before any external deadline. Callers on
+    // a higher-quota API key may opt back into parallelism via
+    // DIG_SEARCH_CONCURRENCY. Definition-order is preserved in `settled`
+    // regardless of completion order.
+    const settled: SettledSearch[] = new Array(queries.length);
+    let nextIndex = 0;
+    const deadlineAt = DEADLINE_S > 0 ? startTime + DEADLINE_S * 1000 : 0;
+    let deadlineHit = false;
+    const worker = async (): Promise<void> => {
+      while (true) {
+        const i = nextIndex++;
+        if (i >= queries.length) return;
+        if (abortController.signal.aborted) return; // SIGINT/SIGTERM landed — stop scheduling
+        // Soft deadline: stop scheduling NEW searches once the internal budget
+        // is spent, so the dig can synthesize from what completed BEFORE the
+        // caller's external timeout SIGTERMs us into a synthesis:null abort.
+        // (In-flight searches are allowed to finish; we only skip un-started ones.)
+        if (deadlineAt && Date.now() >= deadlineAt) {
+          if (!deadlineHit) {
+            deadlineHit = true;
+            process.stderr.write(
+              `[dig] Soft deadline (${DEADLINE_S}s) reached — synthesizing from ${nextIndex - 1}/${queries.length} completed search(es) instead of risking an external-timeout abort.\n`
+            );
+          }
+          return;
+        }
+        settled[i] = await runSearch(queries[i], i);
+      }
+    };
+    const lanes = Math.max(1, Math.min(SEARCH_CONCURRENCY, queries.length));
+    await Promise.all(Array.from({ length: lanes }, () => worker()));
+
     searches = settled
-      .filter((s): s is Extract<SettledSearch, { status: "ok" }> => s.status === "ok")
+      .filter(
+        (s): s is Extract<SettledSearch, { status: "ok" }> =>
+          !!s && s.status === "ok"
+      )
       .map((s) => s.result);
-    failedSearches = settled.length - searches.length;
+    failedSearches = settled.filter((s) => !!s).length - searches.length;
   }
 
   // Deduplicate sources. The REST grounded-search path returns groundingChunks
@@ -2033,8 +2197,11 @@ async function dig() {
   const dedupedSources = [
     ...new Map(allSources.map((s) => [s.uri, s])).values(),
   ].filter((s) => s.uri.startsWith("http"));
-  const nonVertex = dedupedSources.filter((s) => !s.uri.includes("vertexaisearch.cloud.google.com"));
-  const uniqueSources = nonVertex.length > 0 ? nonVertex : dedupedSources;
+  // Resolve vertex grounding-redirect wrappers to real destination URLs so the
+  // emitted sources are dereferenceable (was: opaque redirect links only).
+  const resolvedSources = await resolveRedirectSources(dedupedSources);
+  const nonVertex = resolvedSources.filter((s) => !s.uri.includes("vertexaisearch.cloud.google.com"));
+  const uniqueSources = nonVertex.length > 0 ? nonVertex : resolvedSources;
 
   process.stderr.write(
     `[dig] ${uniqueSources.length} unique sources found. Synthesizing...\n`
