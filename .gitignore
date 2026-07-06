@@ -17,3 +17,5 @@ grimoires/k-hole/
 # under .claude/commands/ and .claude/skills/ that sync-packs.sh regenerates
 # per-environment. Those are tracked-but-arguably-shouldn't-be; flagged in the
 # PR description for an operator call (a `git rm --cached` cleanup decision).
+# br doctor per-run artifacts
+.doctor/
