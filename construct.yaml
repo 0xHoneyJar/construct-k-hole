@@ -84,6 +84,9 @@ capabilities:
     tool_calling: true
     thinking_traces: true
     vision: false
+    # Phase 2 (#21): grounded_search is the actual dependency (was undeclared).
+    # Served by the two-lane substrate — cheval (internal models) + MCP (Exa/Executor).
+    grounded_search: true
 type: skill-pack
 composition_paths:
   writes:
