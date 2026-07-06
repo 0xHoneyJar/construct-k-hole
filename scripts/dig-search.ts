@@ -74,6 +74,8 @@ import { spawn, spawnSync, type ChildProcess } from "child_process";
 import { tmpdir } from "os";
 import { createHash } from "crypto";
 import { classifyCliRateLimit, classifyRestHttpError } from "./lib/provider-errors.js";
+import { groundForDig, type GroundingRuntime } from "./lib/grounding.js";
+import { groundedToSearch } from "./lib/grounding-to-search.js";
 
 // ─── Config ─────────────────────────────────────────────────────
 
@@ -152,13 +154,26 @@ const PROJECT_ROOT = findProjectRoot(process.cwd());
 // where agents pass GOOGLE_API_KEY="$(grep ...)" with literal quotes leaking through
 const GEMINI_KEY = (process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || "")
   .replace(/^["']|["']$/g, "").trim();
-const OPENROUTER_KEY = (process.env.OPENROUTER_API_KEY || "")
-  .replace(/^["']|["']$/g, "").trim();
 // Subscription-first: prefer the gemini CLI (cheval-pattern auth via
-// ~/.gemini/settings.json), fall back to OpenRouter, then REST direct.
+// ~/.gemini/settings.json), then REST direct. OpenRouter removed in Phase 2
+// (#21): external grounding moves to the MCP lane (scripts/lib/grounding.ts).
 // Set DIG_FORCE_REST=1 to skip the CLI even when present (debugging).
 const FORCE_REST = process.env.DIG_FORCE_REST === "1";
-const USE_OPENROUTER = !!OPENROUTER_KEY;
+
+// Phase 2 (#21) two-lane grounding. Default "gemini" keeps today's behavior; set
+// DIG_LANE=mcp to ground via the MCP lane (Exa/Executor) first, falling through to
+// Gemini (still grounded) if the MCP lane degrades. Runtime picks the MCP transport.
+const DIG_LANE = process.env.DIG_LANE || "gemini";
+// BB HIGH-3: validate the runtime against the allowed set instead of a blind cast —
+// an unknown value must not silently select a transport with undefined provenance.
+const VALID_MCP_RUNTIMES: readonly GroundingRuntime[] = ["exa:direct", "executor:code-mode"];
+const MCP_RUNTIME: GroundingRuntime = (() => {
+  const v = process.env.DIG_MCP_RUNTIME;
+  if (!v) return "exa:direct";
+  if ((VALID_MCP_RUNTIMES as readonly string[]).includes(v)) return v as GroundingRuntime;
+  process.stderr.write(`[dig] Ignoring invalid DIG_MCP_RUNTIME='${v}'; using exa:direct.\n`);
+  return "exa:direct";
+})();
 
 mkdirSync(OUTPUT_DIR, { recursive: true });
 
@@ -369,7 +384,7 @@ let cliAuthNoticeShown = false;
 function maybeNotifyCliSubscriptionAuth(): void {
   if (cliAuthNoticeShown) return;
   if (!HAS_GEMINI_CLI || FORCE_REST) return;
-  if (!(GEMINI_KEY || OPENROUTER_KEY)) return;
+  if (!GEMINI_KEY) return;
   cliAuthNoticeShown = true;
   process.stderr.write(
     `[dig] Using gemini CLI subscription auth (OAuth via ~/.gemini/settings.json). ` +
@@ -557,162 +572,13 @@ async function geminiCall(
   return { status: "error", error: "Exhausted retries" };
 }
 
-// ─── OpenRouter API ─────────────────────────────────────────────
-// OpenAI-compatible endpoint; uses `:online` suffix for grounded web search.
-// OpenRouter routes to Gemini, GPT, Claude, etc. under one auth + unified billing.
-// This sidesteps Gemini direct's billing/quota 403s.
 
-function toOpenRouterModel(geminiModel: string, withSearch: boolean): string {
-  // Map Gemini-style model names to OpenRouter slugs.
-  // Preview models exposed by the gemini CLI / native REST may not have
-  // corresponding OpenRouter slugs yet; degrade to the closest published
-  // model so OpenRouter remains a viable fallback rather than 404'ing.
-  let base = geminiModel;
-  if (geminiModel === "gemini-3-flash-preview" || geminiModel === "gemini-3-flash") {
-    base = "google/gemini-2.5-flash";
-  } else if (geminiModel === "gemini-3-pro-preview" || geminiModel === "gemini-3-pro") {
-    base = "google/gemini-2.5-pro";
-  } else if (geminiModel.startsWith("gemini-")) {
-    base = `google/${geminiModel}`;
-  } else if (!geminiModel.includes("/")) {
-    base = `google/${geminiModel}`;
-  }
-  // :online suffix enables web search grounding via OpenRouter's web plugin
-  return withSearch ? `${base}:online` : base;
-}
-
-async function openrouterCall(
-  model: string,
-  prompt: string,
-  opts?: {
-    search?: boolean;
-    maxTokens?: number;
-    temperature?: number;
-  }
-): Promise<GeminiCallResult> {
-  const { search = false, maxTokens = 8192, temperature = 0.7 } = opts ?? {};
-  const orModel = toOpenRouterModel(model, search);
-  const url = "https://openrouter.ai/api/v1/chat/completions";
-
-  const body: Record<string, unknown> = {
-    model: orModel,
-    messages: [{ role: "user", content: prompt }],
-    temperature,
-    max_tokens: maxTokens,
-  };
-
-  for (let attempt = 0; attempt < 3; attempt++) {
-    const controller = new AbortController();
-    const timeoutMs = search ? 90_000 : 60_000;
-    const timeout = setTimeout(() => controller.abort(), timeoutMs);
-
-    try {
-      const res = await fetch(url, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${OPENROUTER_KEY}`,
-          "Content-Type": "application/json",
-          "HTTP-Referer": "https://purupuru.world",
-          "X-Title": "Purupuru Dig",
-        },
-        body: JSON.stringify(body),
-        // FR-3 (IMP-003): combine the per-call timeout signal with the
-        // module-level abortController so a SIGINT/SIGTERM genuinely cancels
-        // this in-flight request, not just abandons the promise.
-        signal: AbortSignal.any([controller.signal, abortController.signal]),
-      });
-
-      if (!res.ok) {
-        const errText = await res.text();
-        if (
-          res.status === 404 ||
-          errText.toLowerCase().includes("not found") ||
-          errText.toLowerCase().includes("not available")
-        ) {
-          return {
-            status: "model_not_found",
-            error: `${orModel}: ${errText.slice(0, 150)}`,
-          };
-        }
-        if (res.status === 429 || res.status >= 500) {
-          if (attempt < 2) {
-            const wait = (attempt + 1) * 3000 + Math.random() * 2000;
-            process.stderr.write(
-              `[dig] OpenRouter retry ${attempt + 1}/3 after ${res.status}...\n`,
-            );
-            await new Promise((r) => setTimeout(r, wait));
-            continue;
-          }
-        }
-        return {
-          status: "error",
-          error: `OpenRouter ${res.status}: ${errText.slice(0, 200)}`,
-        };
-      }
-
-      const data = await res.json();
-      const choice = data.choices?.[0];
-      if (!choice) {
-        return { status: "error", error: "No choices in OpenRouter response" };
-      }
-
-      const text = choice.message?.content || "";
-      if (!text.trim()) {
-        if (attempt < 2) {
-          process.stderr.write(`[dig] OpenRouter empty response, retrying...\n`);
-          await new Promise((r) => setTimeout(r, 2000));
-          continue;
-        }
-        return {
-          status: "success",
-          response: { text: "[Empty response]", sources: [], supports: [], webSearchQueries: [] },
-        };
-      }
-
-      // Extract sources from OpenRouter's annotations (url_citation objects)
-      const annotations = choice.message?.annotations || [];
-      const sources = annotations
-        .filter((a: { type?: string }) => a.type === "url_citation")
-        .map((a: { url_citation?: { url?: string; title?: string } }) => {
-          const uri = a.url_citation?.url || "";
-          let title = a.url_citation?.title || "";
-          if (!title && uri) {
-            try {
-              title = new URL(uri).hostname;
-            } catch {
-              title = "?";
-            }
-          }
-          return { title: title || "?", uri };
-        });
-
-      return {
-        status: "success",
-        response: { text, sources, supports: [], webSearchQueries: [] },
-      };
-    } catch (err) {
-      if (err instanceof DOMException && err.name === "AbortError") {
-        process.stderr.write(`[dig] OpenRouter timed out (${timeoutMs / 1000}s), retrying...\n`);
-      }
-      if (attempt < 2) {
-        await new Promise((r) => setTimeout(r, (attempt + 1) * 3000));
-        continue;
-      }
-      return { status: "error", error: String(err) };
-    } finally {
-      clearTimeout(timeout);
-    }
-  }
-
-  return { status: "error", error: "Exhausted retries" };
-}
-
-// ─── Gemini CLI fallback ─────────────────────────────────────────
-// When both OpenRouter and the REST API fail (e.g., 403 on REST,
-// no OpenRouter key configured), shell out to the gemini CLI which
-// uses a different auth chain (OAuth via service-account.json).
-// Loses grounding metadata — returns plain text only — but recovers
-// when the API path is dead.
+// ─── Gemini CLI (preferred subscription-auth path) ───────────────
+// The CLI (OAuth via ~/.gemini/settings.json) is tried FIRST; the REST API
+// (GEMINI_API_KEY) is the fallback when the CLI is unavailable or fails.
+// Loses grounding metadata — returns plain text only — but recovers when
+// the API path is dead. (BB LOW-1: OpenRouter references removed — that rung
+// was excised in Phase 2 #21.)
 
 
 // The gemini CLI binary. DIG_CLI_BIN overrides it — used by the test suite to
@@ -1193,8 +1059,7 @@ async function geminiCliCallOnce(
 // Subscription-first three-tier routing:
 //   1. Gemini CLI (cheval pattern — OAuth via ~/.gemini/settings.json,
 //      uses our Google subscription quota, no paid API balance consumed)
-//   2. OpenRouter (when OPENROUTER_API_KEY set — unified billing)
-//   3. Gemini REST direct (when GEMINI_API_KEY/GOOGLE_API_KEY set)
+//   2. Gemini REST direct (when GEMINI_API_KEY/GOOGLE_API_KEY set)
 //
 // Override: DIG_FORCE_REST=1 skips the CLI entirely (debugging only).
 
@@ -1221,10 +1086,10 @@ async function searchCall(
   // The router will still produce a structured error downstream, but bailing
   // here keeps the error close to startup so callers don't waste cycles on
   // an unworkable config.
-  if (!HAS_GEMINI_CLI && !USE_OPENROUTER && !GEMINI_KEY) {
+  if (!HAS_GEMINI_CLI && !GEMINI_KEY) {
     return {
       status: "error",
-      error: "No Gemini provider configured. Either run `gemini` once to authenticate the CLI (subscription auth via ~/.gemini/settings.json), set OPENROUTER_API_KEY, or set GEMINI_API_KEY / GOOGLE_API_KEY.",
+      error: "No Gemini provider configured. Either run `gemini` once to authenticate the CLI (subscription auth via ~/.gemini/settings.json), or set GEMINI_API_KEY / GOOGLE_API_KEY.",
     };
   }
 
@@ -1237,15 +1102,6 @@ async function searchCall(
     lastError = result.error;
     process.stderr.write(
       `[dig] Gemini CLI ${result.status === "model_not_found" ? "lacks model" : result.status === "rate_limited" ? "rate-limited" : "failed"} (${result.error.slice(0, 80)}), trying next provider...\n`,
-    );
-  }
-  if (USE_OPENROUTER) {
-    const result = await openrouterCall(model, prompt, opts);
-    if (result.status === "success") return result;
-    if (result.status === "model_not_found") sawModelNotFound = true;
-    lastError = result.error;
-    process.stderr.write(
-      `[dig] OpenRouter ${result.status === "model_not_found" ? "lacks model" : "failed"} (${result.error.slice(0, 60)}), trying next provider...\n`,
     );
   }
   if (GEMINI_KEY) {
@@ -1271,7 +1127,7 @@ async function searchCall(
   }
   return {
     status: "error",
-    error: "all providers exhausted (CLI, OpenRouter, REST). Run `gemini` once interactively to authenticate the CLI, set OPENROUTER_API_KEY, or set GEMINI_API_KEY.",
+    error: "all providers exhausted (CLI, REST). Run `gemini` once interactively to authenticate the CLI, or set GEMINI_API_KEY.",
   };
 }
 
@@ -1329,6 +1185,19 @@ async function gemini(
       return rest as unknown as GeminiResponse;
     }
     return picked as GeminiResponse;
+  }
+
+  // Phase 2 (#21): MCP lane (Exa/Executor) is opt-in via DIG_LANE=mcp. On a real grounded
+  // result we map it into the search shape and return; on a degraded grounding we fall
+  // through to the Gemini path (still grounded via Google Search) rather than fail the dig.
+  if (DIG_LANE === "mcp" && opts?.search !== false) {
+    const g = await groundForDig(prompt, { runtime: MCP_RUNTIME });
+    if (g.grounded) {
+      return groundedToSearch(g.result) as GeminiResponse;
+    }
+    process.stderr.write(
+      `[dig] MCP lane degraded (${g.errorCode}: ${(g.reason ?? "").slice(0, 60)}), falling back to Gemini...\n`,
+    );
   }
 
   const modelsToTry = [activeModel, ...DIG_FALLBACK_MODELS.filter(m => m !== activeModel)];

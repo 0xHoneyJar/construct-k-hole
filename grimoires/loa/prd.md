@@ -1,247 +1,163 @@
 ---
-title: Product Requirements Document — dig-search Phase 1 · scout · streaming · escape hatch · envelope loop
-date: 2026-05-14
-revision: r2 (Flatline-integrated)
-status: accepted · Flatline-gated r2 · operator-approved 2026-05-14
-authors: claude-opus-4-7 (OPERATOR + FAGAN · bonfire session, cd-bridged to construct-k-hole)
-issue: 0xHoneyJar/construct-k-hole#21 (Phase 1 scope only)
-cycle_vehicle: lightweight author + Flatline-gate (operator-chosen 2026-05-14)
-flatline_r1: 2-model effective (GPT-5.4-codex + gemini-3.0-pro · opus dropped to a
-  construct-k-hole normalization bug, tracked separately). 12 findings, all clarifications,
-  all integrated into r2. GPT/gemini agreed strongly across all 12.
+title: Product Requirements Document — k-hole Phase 2 · Two Lanes, One Grounded-Result Contract
+date: 2026-07-06
+revision: r1
+status: draft · pending Flatline gate
+issue: 0xHoneyJar/construct-k-hole#21 (Phase 2/2.5/3 — the Effect-TS substrate rebuild kickoff)
+cycle_vehicle: bonfire session, cd-bridged to construct-k-hole (same pattern as Phase 1 PRD)
+supersedes_design: sdd-khole-hounfour.md (April OpenRouter design)
+sdd: grimoires/loa/sdd.md (ported from bonfire redesign SDD, 2026-07-06)
+operator_decisions: 2026-07-06 (5 binding answers, see §3)
 ---
 
-# PRD — dig-search Phase 1: make the question cheap to validate
+# PRD — k-hole Phase 2: Two Lanes, One Grounded-Result Contract
 
 ## 1. Problem
 
-`dig-search.ts` is the mandated web-research tool (global CLAUDE.md decrees it for all
-DIG-mode work). Today a depth-2 dig runs **5–25 minutes with zero visibility and no way
-to course-correct**. The real cost is not the latency — it is that **the latency
-prevents question iteration**. To make a 20-minute wait worth it, the operator must ask
-the right question *blind, on the first try* — but you cannot validate a question
-without running it.
+k-hole is the operator's **construct researcher** — `dig-search.ts` is the mandated
+web-research path for all DIG-mode work (global CLAUDE.md decree). Phase 1 (issue #21)
+made the *question* cheap to iterate (streaming, scout, escape hatch, envelope loop) and
+shipped. But Phase 1 left the **grounding substrate** untouched, and it is dishonest in
+three ways:
 
-Issue #21 proposes a full Effect-TS rebuild in three phases. The issue's own scope note
-concedes *"Phase 1 alone resolves most of the pain."* A FAGAN unbundle of #21 (operator-
-approved 2026-05-14) splits the work:
+1. **k-hole is the estate's only router-bypasser.** Its four scripts (`dig-search`,
+   `deep-research`, `visual-review`, `visual-dig`) `fetch()` provider endpoints directly
+   and hand-parse proprietary grounding metadata — ~400 lines of duplicated client code.
+   Every other multi-model consumer in Loa+bonfire (Flatline, GPT-Review, Red-Team) goes
+   through the `cheval` router; k-hole is the outlier (arch-brief-khole-openrouter.md).
 
-- **This PRD = Phase 1 + the envelope loop** — operator-pain relief, no rewrite.
-- **Separate kickoff = Phase 2/2.5/3** — the Effect-TS substrate rebuild + the kaironic
-  depth controller (from the #21 enrichment comment). Adopts `construct-effect-substrate`.
+2. **Transport churn is the failure mode.** The grounding transport has swapped
+   Gemini-direct → OpenRouter `:online` → (proposed) Executor, each swap re-deriving the
+   citation-parse and re-introducing flakiness. There is no stable seam, so each external
+   dependency change breaks the researcher.
 
-## 2. Goals
+3. **Grounding is not fail-closed.** When grounding degrades, `/dig` can silently return
+   a non-grounded answer — the worst outcome for a tool whose entire value is *grounding
+   the agent in reality*. An ungrounded "research" result is confident fiction.
 
-| ID | Goal |
-|----|------|
-| G1 | A **scout pass** that validates a question's *direction* in ≤45s — source list + one-line gist per source — before committing a deep run. |
-| G2 | **Streaming** — progressive per-search visibility during a dig, so the operator/agent can decide continue-or-abort mid-flight instead of waiting blind. |
-| G3 | An **escape hatch** — `SIGINT` flushes whatever completed as a valid partial artifact. Abort-with-partial is a first-class outcome, not a crash. |
-| G4 | The **envelope loop** — `creative-resonance-envelope.threads_to_pull` from activated envelopes seed the next dig's queries; a dig emits a candidate envelope capturing what it surfaced. Question-iteration becomes a *data-flow*, not just a latency, fix. |
-| G5 | **Land the schema** — `creative-resonance-envelope.schema.json` + fixtures + validator land canonically in the `construct-k-hole` repo (today they exist only in the `.loa` vendored copy). |
+The correct question was never "which transport?" — it is **"what is the stable contract
+both an internal-model lane and an external-tooling lane emit into, so we stop swapping?"**
 
-## 3. Non-goals (explicitly Phase 2/2.5/3 — separate kickoff)
+## 2. Vision
 
-- Effect-TS core: typed error channel, `Effect.Schedule` retry, layer-based DI, test mode.
-- Content-addressed cache, provider racing (`Effect.race`), `--budget` config.
-- The kaironic depth controller from the #21 enrichment: resonance-driven depth
-  allocation, convergence detector, session chronos backstops, dig↔forge transition,
-  the SEED→EXPLORE→SYNTHESIZE→EVALUATE phase model.
-- Rewriting the existing cycle-098 retry patch (`DIG_CLI_TIMEOUT_MS` / `DIG_CLI_MAX_ATTEMPTS`).
-  P1 leaves it intact; P2 formalizes it as `Effect.Schedule`.
+k-hole becomes a **first-class citizen of the Loa router ecosystem** running on **two
+lanes over one contract**:
 
-P1 is **additive** — new flags and new code paths on the existing 1401-line script. No rewrite.
+- **cheval lane** (internal models): all model inference routes through `cheval` /
+  `model-invoke` — the same router every other Loa consumer uses. k-hole stops carrying
+  its own LLM client.
+- **MCP lane** (external tooling): web grounding via **Executor MCP code-mode** (primary)
+  and **Exa** (direct fallback) — external search/tools, dispatched like cheval dispatches
+  models, but for tools.
+- **One grounded-result contract** (harvested from `feat/khole-hounfour-framework`):
+  both lanes normalize into `GroundedResult` / `Citation` / `GroundedQuality` with a
+  pinned `CONTRACT_VERSION` and a `cheval --capabilities` probe. This is the harmonizing
+  seam that makes "stop swapping transports" *mechanically* true — a new external provider
+  changes the MCP lane's adapter, never the contract or the four scripts.
 
-## 4. Users
+Deep research is a **stable combination of agents + tooling**, not a single pipe. The two
+lanes are a feature, not redundancy: internal reasoning and external grounding are
+genuinely different capabilities that compose.
 
-- **The operator** running `/dig` interactively — pair-research, intentional depth.
-- **Agents in DIG mode** invoking `dig-search.ts` per the global CLAUDE.md mandate.
-- **Downstream constructs** that will consume emitted envelopes (rooms-substrate handoff
-  packets — out of scope here, but the emitted envelope must be schema-valid for them).
+## 3. Operator decisions (binding, 2026-07-06)
 
-## 5. Functional Requirements
+These were provided as five direct answers and are load-bearing requirements, not
+inferences:
 
-### FR-1 — Scout pass
-A fast shallow mode: one breadth search, **no synthesis phase**, output = source list +
-one-line gist per source. Answers *"is this question pointed at the right space?"* for
-~free, before the deep run.
+1. **External access rides through Executor MCP; code-mode is the path forward to prevent
+   flakiness.** Executor code-mode collapses N flaky per-tool round-trips into one
+   sandboxed execution. "We should be able to operate this way cleanly."
+2. **All four scripts on the same substrate** so things don't break — no per-script
+   client divergence.
+3. **Remove OpenRouter.** The `:online` / `toOpenRouterModel` / `openrouterCall` path is
+   deleted; the Exa it proxied becomes first-class in the MCP lane.
+4. **Both consumers matter — programmatic and in-session.** In-session `/dig` is likely
+   the *most-used*, standing in for WebSearch, because **grounding the agent in reality is
+   crucially important** → grounding is fail-closed for the in-session path.
+5. **First-class constructs within the Loa ecosystem** (`/recall`): research artifacts
+   join the governed memory estate; k-hole reads `/recall` at descent start.
 
-- **Surface (resolves OQ-1, Flatline IMP-002):** scout uses a dedicated **`--scout`
-  boolean flag**. `--depth 0` is NOT reused — `dig-search.ts:140-141` + `:1281` already
-  define depth 0 as "Lilly's tank" (synthesis-only, skip search). `--scout` and
-  `--depth N` are mutually exclusive; passing both is a validation error (preserves
-  backward-compatible, unambiguous CLI semantics).
-- **The gist is raw provider output (Flatline IMP-001).** The one-line gist per source
-  is extracted from the search call's own returned snippets — **NOT a second model
-  call.** This is what preserves both the ≤45s target and the "~free" claim. If a
-  provider returns no usable snippet for a source, the gist is the source title +
-  `(no snippet)` — never a synthesized summary.
-- **Single-call limitation, documented (Flatline IMP-011).** A `--scout` pass is one
-  search call; it cannot decompose a multi-faceted question the way a depth-N dig's
-  `buildSearchQueries()` does. This is an accepted limitation, stated in `--help` and
-  the dig SKILL.md — scout answers "right *space*?", not "right *facets*?".
-- Target wall-clock ≤45s. Reuses the existing provider router; runs exactly one search.
-- Output is a distinct, clearly-labeled "scout" shape — not a truncated deep result.
+## 4. Goals & success metrics
 
-### FR-2 — Streaming
-Emit each search result **as it completes**, not buffered until the synthesis call.
-Today the agent + operator wait blind between "Running N searches" and "Done in 951s"
-(`dig-search.ts` runs all searches, then `synthesize()` at `:1158`). Streaming surfaces
-search 1 at ~T+90s.
+| # | Goal | Success signal |
+|---|------|----------------|
+| G1 | Two lanes, one contract | All four scripts emit `GroundedResult` regardless of lane; contract `CONTRACT_VERSION` pinned; `cheval --capabilities` probe green |
+| G2 | k-hole rides cheval | Zero direct provider `fetch()` in k-hole scripts; all inference via `model-invoke`; ~400 LoC of duplicated client deleted |
+| G3 | Executor MCP code-mode grounding | `/dig` grounds via Executor code-mode; Exa-direct fallback behind the same `ground()` interface; a provider swap touches only the MCP-lane adapter |
+| G4 | OpenRouter removed | No `:online` / `openrouterCall` / `toOpenRouterModel` references remain; Exa is first-class |
+| G5 | Fail-closed grounding (in-session) | `/dig` never returns a silently-non-grounded answer; degraded grounding is a typed, explicit result |
+| G6 | Parity preserved | Snapshot test: one `/dig` + one `/forge` pre/post produce equivalent `findings`/`sources`/`pull_threads` shape (Phase 1's streaming + envelope-loop behavior intact) |
+| G7 | /recall first-class citizenship | Research artifacts carry Straylight frontmatter + QMD registration; k-hole reads `/recall` at descent start to dedupe/resume |
 
-- **stdout/stderr contract (resolves OQ-2, Flatline IMP-012):** structured stream events
-  are **NDJSON on stdout** (one JSON line per completed search). Human-readable progress
-  lines stay on **stderr** (unchanged from today). The final synthesis artifact still
-  writes to its file. A non-streaming consumer that reads only the file sees no change;
-  a consumer reading stdout gets the progressive stream. This contract is documented so
-  future changes don't regress either channel.
-- Composes with the existing trail-file write + stderr progress lines.
+## 5. Users & consumers
 
-### FR-3 — SIGINT escape hatch
-Trap `SIGINT` → flush whatever completed as a **valid partial artifact**, exit **130**
-(POSIX SIGINT convention — clean exit, artifact flushed, `partial:true` set, but
-automation-detectable). A wrong question is then discovered after 2 minutes, not 25.
+- **Primary — in-session operator via `/dig`.** Replaces WebSearch for DIG-mode. Grounding
+  correctness is non-negotiable here (decision #4). Fail-closed protects this path.
+- **Secondary — programmatic construct consumers.** Other constructs/skills compose k-hole
+  for grounded research; they consume the `GroundedResult` contract directly.
+- **Ecosystem beneficiaries.** Once k-hole is on cheval, `model-invoke`'s retry/budget/trust
+  logging covers k-hole traffic (today it flies blind).
 
-> **Amendment (SDD r2, SKP-003, operator-confirmed 2026-05-14):** original r2 said
-> "exit 0." Flatline flagged that exit 0 makes automation read an interrupted run as
-> success. Changed to exit 130. The "not a crash" intent is preserved.
+## 6. Functional requirements
 
-- **Atomic-synthesis semantics (Flatline IMP-008).** `synthesize()` is a single model
-  call — it either completed or it did not. There is no "partial synthesis." The partial
-  artifact is therefore one of two well-defined shapes:
-  - `SIGINT before synthesis` → artifact = completed searches only, `synthesis: null`,
-    `partial: true`, `completed_searches: N/total`.
-  - `SIGINT during synthesis` → the in-flight synthesis call is abandoned (not awaited);
-    artifact = completed searches only, same shape. The synthesis call is never
-    presented half-rendered.
-- The trail file (if `--trail`) records the partial run so the next dig has context.
-- No orphaned subprocesses — the `spawn`'d provider CLI child (`dig-search.ts:30`) is
-  terminated and reaped cleanly on the SIGINT path.
-- **Highest blast radius — sequence last (Flatline IMP-007).** FR-3 touches process
-  lifecycle + subprocess reaping. The sprint plan MUST sequence FR-3 after FR-1/FR-2
-  land, and gate it behind its own test scenarios (see NFR-4) before merge.
+- **FR-1 (contract harvest).** Harvest `GroundedResult`/`Citation`/`GroundedQuality`
+  dataclasses (`ce555e2b`) + `grounded-result-v1`/`error-v1`/`request-v1` schemas
+  (`66c2fcd7`) + `CONTRACT_VERSION` and `cheval --capabilities` manifest (`c330c7b9`) +
+  the 456-line test corpus (`1c123a16`) from `feat/khole-hounfour-framework`. Adapt
+  `grounding_provenance` and add `grounded_runtime`/`lane` for the two-lane model. **Do
+  NOT port** the OpenRouter adapter parse (`55861347`).
+- **FR-2 (cheval lane).** All four scripts route inference through `model-invoke`. Delete
+  per-script provider clients. Retire the redundant credential cascade.
+- **FR-3 (MCP lane — Executor code-mode).** Web grounding via Executor MCP code-mode,
+  returning structured citations into the contract. Exa-direct behind the same `ground()`
+  interface as the baseline fallback (ship the fallback first; code-mode as it proves out).
+- **FR-4 (remove OpenRouter).** Delete `:online`/`toOpenRouterModel`/`openrouterCall`.
+- **FR-5 (fail-closed `/dig`).** In-session grounding failures produce a typed degraded
+  result, never a silent non-grounded answer.
+- **FR-6 (all four scripts on the substrate).** `dig-search`/`deep-research`/`visual-review`/
+  `visual-dig` all route through the shared `scripts/lib/llm.ts` + `scripts/lib/grounding.ts`.
+- **FR-7 (/recall citizenship).** Research artifacts get Straylight frontmatter + QMD
+  registration; k-hole reads `/recall` at descent start to dedupe/resume prior research.
+- **FR-8 (parity).** Preserve Phase 1's streaming + envelope-loop contract; snapshot test
+  proves `/dig` + `/forge` output shape equivalence pre/post.
 
-### FR-4 — Envelope-seeded queries
-`--resonance` already accepts a resonance profile path (`dig-search.ts:138,985`). Extend
-it (or add `--envelopes`) so that when given a creative-resonance-envelope **set**, the
-dig reads `threads_to_pull` from the activated envelopes and uses those named threads as
-**seed queries** — the operator authors zero query text.
+## 7. Non-functional requirements
 
-- **Schema-version pinning (Flatline IMP-010).** Each envelope carries `schema_version`
-  (already required by the schema). On read, the dig validates the consumed envelope's
-  `schema_version` against the in-repo schema. A minor-version-ahead envelope loads with
-  a stderr warning; a major-version mismatch is a hard error (the consume-emit loop must
-  not silently drift). This rule is the same on the FR-5 emit side.
+- Node ≥20.10 (existing manifest); ESM; `child_process.spawn` streaming preserved.
+- `capabilities` in `construct.yaml` gains `grounded_search` (today declares `tool_calling`
+  only — the actual dependency was undeclared).
+- Cost log carried forward + a `lane` field; budget enforcement via cheval; session-level
+  ceiling for `/forge` fan-out.
+- Standalone-repo resilience: soft-fail if `model-invoke` not on PATH.
 
-### FR-5 — Envelope emission
-A dig emits a `creative-resonance-envelope` (candidate, `provenance.candidate: true`)
-capturing what it surfaced — `ref`, `resonance.evidence`, `why`, and critically
-`threads_to_pull` for the *next* dig. This is what closes the loop: dig output
-structurally becomes dig input.
+## 8. Scope
 
-- **Deterministic output paths + derivation rules (Flatline IMP-003).** Before this is
-  buildable/testable the PRD must pin:
-  - **Where:** emitted envelopes write to `<trail-dir>/envelopes/<envelope_id>.json` when
-    `--trail` is set, else to `./dig-envelopes/<envelope_id>.json`. Path is deterministic
-    from inputs, not timestamped.
-  - **envelope_id derivation:** kebab-case slug derived from `direction.name` + a short
-    content hash of `ref.name`, so re-running the same dig overwrites rather than
-    duplicates. Collisions across distinct refs get a `-2` suffix.
-  - **emission trigger (resolves OQ-3):** auto-emit on every non-scout dig as
-    `provenance.candidate: true`. Scout passes do NOT emit (too shallow to ground a
-    `why`). Opt-out via `--no-emit-envelope`.
+**In scope (Phase 2 kickoff):** the two-lane substrate + harvested contract + all four
+scripts migrated + OpenRouter removed + fail-closed `/dig` + `/recall` citizenship + parity
+tests. The companion contract lands in `loa_cheval` (upstream loa) via a **separate PR**
+(the contract's home is Python `loa_cheval/types.py`); this cycle harvests + adapts it and
+consumes it from k-hole.
 
-### FR-6 — Land the envelope schema
-`creative-resonance-envelope.schema.json` + `fixtures/` + `validate-fixtures.py` +
-`README.md` land in `construct-k-hole/schemas/` (no `schemas/` dir exists yet). Today
-they live only in `~/.loa/constructs/packs/k-hole/schemas/` — canonically wrong.
+**Out of scope (Phase 2.5/3, separate kickoff per #21):** full Effect-TS core rewrite
+(typed error channel via `Effect.Schedule`, layer-based DI, test mode), the kaironic depth
+controller. This cycle rebuilds the *grounding substrate + contract seam*; the Effect-TS
+*runtime* rebuild remains deferred.
 
-- **Canonical-divergence guard (Flatline IMP-006).** Once FR-6 lands, two copies exist
-  (`construct-k-hole/schemas/` and the `.loa` vendored copy). The cycle MUST ship one of:
-  (a) a CI sync-check that fails if the two diverge, or (b) an explicit
-  `"x-canonical-source": "construct-k-hole"` marker in the schema + a note in the `.loa`
-  copy's README that it is derived. Decision deferred to the SDD; the PRD requires that
-  *one* of them ships — silent divergence already happened once.
-- FR-4/FR-5 depend on FR-6 (schema in-repo). FR-6 has no dependencies — **do it first.**
+## 9. Risks & dependencies
 
-## 6. Non-functional Requirements
+| Risk | Mitigation |
+|------|------------|
+| Executor code-mode can't cleanly return structured citations from its sandbox | Ship Exa-direct fallback FIRST behind `ground()`; code-mode defers to it until proven (SDD Open Question 1) |
+| Some ecosystem consumer hard-depends on `hounfour.providers.openrouter` | Grep before deletion; k-hole stops using it but the provider entry can stay for others (decoupled) |
+| Two lanes double the error surface vs one pipe | Accepted: the contract + fail-closed discipline make every failure typed/explicit; code-mode *reduces* net round-trips |
+| Contract PR to loa (2nd repo) blocks k-hole | Harvest + adapt the contract in-repo first (vendored types acceptable interim); upstream PR lands in parallel |
+| Companion cross-repo drift (loa `loa_cheval` vs k-hole vendored copy) | Pin `CONTRACT_VERSION`; `cheval --capabilities` probe detects mismatch and fails closed |
 
-- **NFR-1 — No new *runtime* dependencies.** P1 adds no npm dependency to
-  `dig-search.ts`. **Clarification (Flatline IMP-005):** `validate-fixtures.py` is a
-  Python **dev/CI tool**, not a runtime dependency of `dig-search.ts` — it validates
-  fixtures in CI and is never imported or shelled-out by the dig at runtime. The
-  no-new-runtime-deps claim is about the dig's execution path only. The SDD states the
-  Python-for-fixtures dependency boundary explicitly.
-- **NFR-2 — Backward compatible.** Existing `--query` / `--depth N` / `--trail` /
-  `--resonance` / `--model` behavior is preserved unchanged. All P1 capabilities are
-  additive flags/paths. `--scout` ⊕ `--depth N` is the only new mutual-exclusion.
-- **NFR-3 — Determinism is NOT in scope.** Grounded web search is non-deterministic at
-  the provider; predictable latency/cost belongs to P2 (cache + budget). P1 only makes
-  the *wait observable and abortable*, not the *result reproducible*.
-- **NFR-4 — Explicit test scenarios (Flatline IMP-004).** EDD `min_test_scenarios: 3`
-  is a floor, not a target. The sprint plan MUST enumerate scenarios for, at minimum:
-  (a) `--scout` returns the scout shape within budget; (b) streaming emits valid NDJSON
-  per search and the file artifact is unaffected; (c) `SIGINT` before synthesis →
-  `partial:true` artifact, exit 0, no orphan subprocess; (d) `SIGINT` during synthesis →
-  same shape, in-flight call abandoned; (e) an emitted envelope validates against the
-  in-repo schema; (f) a schema-version-major-mismatch envelope is a hard error on read.
-- **NFR-5 — Load-bearing tool discipline.** `dig-search.ts` is mandated tooling — blast
-  radius is every DIG session. FR-3 is the highest-risk change (see FR-3 sequencing).
+## 10. Provenance
 
-## 7. Risks & Dependencies
-
-| ID | Item |
-|----|------|
-| DEP-1 | FR-4/FR-5 depend on FR-6 (schema in-repo). FR-6 has no dependencies — do it first. |
-| RISK-1 | SIGINT + `spawn`'d child reaping is the highest-blast-radius change. Mitigation: FR-3 sequenced last + NFR-4 scenarios (c)/(d) gate the merge. |
-| RISK-2 | `.loa` vendored copy and the `construct-k-hole` repo already diverged once (the schema). FR-6's canonical-divergence guard closes it; the canonical sync *direction* is an SDD decision + cycle-retro flag. |
-| RISK-3 | construct-k-hole's in-repo Flatline gate has an opus-normalization bug (fresh upstream loa 1.157.0) — tracked separately. This PRD's r1 review ran as an effective 2-model gate (GPT + gemini, strong mutual agreement). Not a PRD risk; a tooling risk noted for transparency. |
-
-## 8. Success Metrics
-
-All wall-clock metrics use this **measurement protocol (Flatline IMP-009):** median of
-5 runs against a fixed query set, same machine, provider-warm; reported with min/max
-range because providers are non-deterministic. A single run is never the metric.
-
-- A `--scout` pass returns in **≤45s median** (vs 5–25 min for a deep dig).
-- Streaming: first search result NDJSON line visible at **≤T+90s median**, not T+end.
-- `SIGINT` during a dig produces a **usable `partial:true` artifact** and exits 0 — in
-  100% of test runs (deterministic, not median).
-- An envelope's `threads_to_pull` seeds a subsequent dig with **zero manual query text**.
-- The envelope schema **validates all its fixtures** from within the `construct-k-hole`
-  repo (deterministic).
-
-## 9. Phasing
-
-This PRD is **Phase 1 + the envelope loop** of issue #21. The envelope loop (G4/FR-4/FR-5)
-is promoted from #21's "composes with existing work" footnote to a co-equal P1 deliverable
-— the #21 enrichment comment confirms the envelope is the *substrate the whole kaironic
-layer runs on*, not an add-on.
-
-**Phase 2/2.5/3** (Effect-TS substrate rebuild + kaironic depth controller) earns a
-separate kickoff issue that explicitly adopts `construct-effect-substrate` as its doctrine
-pack — and carries the pack-graduation framing: `construct-k-hole` would be that pack's
-non-Next.js third validator, moving it `candidate → active`.
-
----
-
-## Appendix — Flatline r1 integration log
-
-2-model effective gate (GPT-5.4-codex + gemini-3.0-pro; opus dropped to a construct-k-hole
-normalization bug). All 12 findings were clarifications — none scope expansions — and all
-were integrated:
-
-| Finding | gpt/gem | Integrated into |
-|---------|---------|-----------------|
-| IMP-001 | 910/920 | FR-1 — gist is raw provider output, not a model call |
-| IMP-002 | 895/950 | FR-1 — `--scout` flag resolved (was OQ-1); mutual-exclusion with `--depth` |
-| IMP-003 | 880/890 | FR-5 — deterministic output paths + envelope_id derivation + emit trigger |
-| IMP-008 | 835/810 | FR-3 — atomic-synthesis semantics; no "partial synthesis" |
-| IMP-006 | 805/850 | FR-6 — canonical-divergence guard (CI sync-check or marker) |
-| IMP-010 | 790/830 | FR-4 — schema-version pinning on consume + emit |
-| IMP-005 | 730/890 | NFR-1 — Python validator is a dev/CI tool, not a runtime dep |
-| IMP-004 | 760/910 | NFR-4 — explicit enumerated test scenarios |
-| IMP-007 | 690/780 | FR-3 — sequenced last, gated behind its own scenarios |
-| IMP-012 | 650/620 | FR-2 — stdout NDJSON / stderr human contract (was OQ-2) |
-| IMP-009 | 705/720 | §8 — measurement protocol (median of 5, range reported) |
-| IMP-011 | 560/580 | FR-1 — single-call multi-faceted limitation documented |
+- Phase-1 arc: issue #21, shipped via PRs #22/#25/#26; Phase-1 artifacts archived at
+  `grimoires/loa/archive/2026-07-06-dig-search-phase1-shipped/`.
+- Design: `grimoires/loa/sdd.md` (this cycle) supersedes April `sdd-khole-hounfour.md`.
+- Grounding facts (repo-verified 2026-07-06): bonfire
+  `grimoires/loa/context/khole-redesign-grounding-facts-2026-07-06.md`.
+- Harvest source: `feat/khole-hounfour-framework` @ `1c123a16` (loa remote).
