@@ -74,6 +74,8 @@ import { spawn, spawnSync, type ChildProcess } from "child_process";
 import { tmpdir } from "os";
 import { createHash } from "crypto";
 import { classifyCliRateLimit, classifyRestHttpError } from "./lib/provider-errors.js";
+import { groundForDig, type GroundingRuntime } from "./lib/grounding.js";
+import { groundedToSearch } from "./lib/grounding-to-search.js";
 
 // ─── Config ─────────────────────────────────────────────────────
 
@@ -157,6 +159,12 @@ const GEMINI_KEY = (process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || 
 // (#21): external grounding moves to the MCP lane (scripts/lib/grounding.ts).
 // Set DIG_FORCE_REST=1 to skip the CLI even when present (debugging).
 const FORCE_REST = process.env.DIG_FORCE_REST === "1";
+
+// Phase 2 (#21) two-lane grounding. Default "gemini" keeps today's behavior; set
+// DIG_LANE=mcp to ground via the MCP lane (Exa/Executor) first, falling through to
+// Gemini (still grounded) if the MCP lane degrades. Runtime picks the MCP transport.
+const DIG_LANE = process.env.DIG_LANE || "gemini";
+const MCP_RUNTIME = (process.env.DIG_MCP_RUNTIME as GroundingRuntime) || "exa:direct";
 
 mkdirSync(OUTPUT_DIR, { recursive: true });
 
@@ -1168,6 +1176,19 @@ async function gemini(
       return rest as unknown as GeminiResponse;
     }
     return picked as GeminiResponse;
+  }
+
+  // Phase 2 (#21): MCP lane (Exa/Executor) is opt-in via DIG_LANE=mcp. On a real grounded
+  // result we map it into the search shape and return; on a degraded grounding we fall
+  // through to the Gemini path (still grounded via Google Search) rather than fail the dig.
+  if (DIG_LANE === "mcp" && opts?.search !== false) {
+    const g = await groundForDig(prompt, { runtime: MCP_RUNTIME });
+    if (g.grounded) {
+      return groundedToSearch(g.result) as GeminiResponse;
+    }
+    process.stderr.write(
+      `[dig] MCP lane degraded (${g.errorCode}: ${(g.reason ?? "").slice(0, 60)}), falling back to Gemini...\n`,
+    );
   }
 
   const modelsToTry = [activeModel, ...DIG_FALLBACK_MODELS.filter(m => m !== activeModel)];

@@ -229,11 +229,13 @@ export async function groundForDig(query: string, opts: GroundOpts = {}): Promis
   if (outcome.ok) {
     return { grounded: true, result: outcome.grounded };
   }
+  // `in`-guard narrows the union under the repo's non-strict tsc flags too.
+  const err = "error" in outcome ? outcome.error : { code: "PROVIDER_UNAVAILABLE" as const, message: "unknown", retryable: false };
   return {
     grounded: false,
-    reason: outcome.error.message,
-    errorCode: outcome.error.code,
-    result: degradedMarker(query, outcome.error.message, outcome.error.code, nowIso),
+    reason: err.message,
+    errorCode: err.code,
+    result: degradedMarker(query, err.message, err.code, nowIso),
   };
 }
 
