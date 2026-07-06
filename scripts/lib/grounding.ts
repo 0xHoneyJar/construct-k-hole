@@ -180,3 +180,64 @@ export async function ground(query: string, opts: GroundOpts = {}): Promise<Grou
   };
   return { ok: true, grounded };
 }
+
+// ── fail-closed /dig path (S2.T2, FR-5, SDD §3.4) ───────────────────────────
+// The in-session /dig consumer replaces WebSearch; grounding the agent in reality is
+// the whole point. So a grounding failure must NEVER be presented as a grounded answer.
+// groundForDig() always returns a typed outcome: on failure it yields a DEGRADED marker
+// (grounded:false, extra.degraded:true, empty citations) that downstream must render as
+// "grounding unavailable — not grounded", not silently continue with model-only text.
+
+export interface DigGroundOutcome {
+  /** true only when real citations were retrieved. Callers MUST branch on this. */
+  grounded: boolean;
+  result: GroundedResult;
+  reason?: string;
+  errorCode?: ErrorCode;
+}
+
+function degradedMarker(query: string, reason: string, code: ErrorCode, nowIso: () => string): GroundedResult {
+  return {
+    text: "",
+    citations: [],
+    executedQueries: [query],
+    groundingProvenance: "none",
+    groundedRuntime: "degraded",
+    lane: "mcp",
+    retrievedAt: nowIso(),
+    latencyMs: 0,
+    quality: {
+      citationCount: 0,
+      executedQueryCount: 1,
+      textChars: 0,
+      citationUrlsParseable: true,
+      citationUrlsUnique: true,
+      coverageEstimate: 0,
+    },
+    extra: { degraded: true, reason, error_code: code },
+  };
+}
+
+/**
+ * Ground for the in-session /dig path, fail-closed. Never throws, never returns
+ * non-grounded text as if grounded. On any grounding failure the outcome is
+ * `{ grounded: false, result: <degraded marker> }`.
+ */
+export async function groundForDig(query: string, opts: GroundOpts = {}): Promise<DigGroundOutcome> {
+  const nowIso = opts.nowIso ?? (() => new Date().toISOString());
+  const outcome = await ground(query, opts);
+  if (outcome.ok) {
+    return { grounded: true, result: outcome.grounded };
+  }
+  return {
+    grounded: false,
+    reason: outcome.error.message,
+    errorCode: outcome.error.code,
+    result: degradedMarker(query, outcome.error.message, outcome.error.code, nowIso),
+  };
+}
+
+/** Guard: true if a result is a real grounded answer (not the degraded marker). */
+export function isGrounded(r: GroundedResult): boolean {
+  return r.groundingProvenance !== "none" && r.citations.length > 0 && r.extra?.degraded !== true;
+}
