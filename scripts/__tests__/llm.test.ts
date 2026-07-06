@@ -52,11 +52,21 @@ test("cheval lane: passes through a grounded sub-object from cheval, tagged chev
     ...present,
     run: async () => ({ code: 0, stdout: JSON.stringify({ grounded: groundedWire }), stderr: "" }),
   };
-  const r = await invoke({ agent: "k-hole-dig", prompt: "x", tools: ["grounded_search"] }, deps);
+  const r = await invoke({ agent: "k-hole-dig", prompt: "x" }, deps);
   assert.ok(r.ok);
   if (!r.ok) return;
   assert.equal(r.grounded.lane, "cheval");
   assert.equal(r.grounded.citations[0].url, "https://x.io");
+});
+
+test("BB HIGH-1: a MALFORMED cheval grounded sub-object fails closed (GROUNDING_MALFORMED)", async () => {
+  // bad enum + missing required fields — must not be coerced into a GroundedResult
+  const badWire = { grounded: { text: "x", citations: [], grounding_provenance: "bogus" } };
+  const deps: InvokeDeps = { ...present, run: async () => ({ code: 0, stdout: JSON.stringify(badWire), stderr: "" }) };
+  const r = await invoke({ agent: "k-hole-dig", prompt: "x" }, deps);
+  assert.ok(!r.ok);
+  if (r.ok) return;
+  assert.equal(r.error.code, "GROUNDING_MALFORMED");
 });
 
 test("soft-fail: model-invoke absent → typed NATIVE_RUNTIME_REQUIRED, no throw", async () => {

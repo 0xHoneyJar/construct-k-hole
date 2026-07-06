@@ -21,6 +21,7 @@ import { dirname, join } from "node:path";
 import {
   CONTRACT_VERSION,
   fromWire,
+  validateGroundedResultWire,
   type ErrorCode,
   type GroundedResult,
 } from "./contract/index.js";
@@ -33,9 +34,12 @@ export interface InvokeOpts {
   agent: string;
   prompt: string;
   model?: string;
-  tools?: Array<"grounded_search" | "vision">;
   maxTokens?: number;
 }
+// Note (BB HIGH-2): the cheval lane is pure INFERENCE. External grounding is the MCP
+// lane's job (scripts/lib/grounding.ts) — so this shim intentionally exposes no `tools`
+// option. If cheval itself returns a `grounded` sub-object (a natively-grounding model),
+// we still accept it below, but VALIDATED (BB HIGH-1), never trusted blindly.
 
 export type InvokeResult =
   | { ok: true; grounded: GroundedResult }
@@ -171,9 +175,19 @@ export async function invoke(opts: InvokeOpts, deps: InvokeDeps = {}): Promise<I
     };
   }
 
-  // If cheval already produced a grounded sub-object (grounded_search tool path), use it.
+  // If cheval already produced a grounded sub-object (a natively-grounding model), accept
+  // it — but VALIDATE against the contract first (BB HIGH-1). Fail closed on malformed
+  // rather than coercing bad enums/missing fields into a GroundedResult.
   if (payload.grounded && typeof payload.grounded === "object") {
-    const g = fromWire(payload.grounded as Record<string, unknown>);
+    const wire = payload.grounded as Record<string, unknown>;
+    const v = validateGroundedResultWire(wire);
+    if (!v.valid) {
+      return {
+        ok: false,
+        error: { code: "GROUNDING_MALFORMED", message: `cheval grounded output invalid: ${v.errors[0]}`, retryable: false },
+      };
+    }
+    const g = fromWire(wire);
     if (!g.lane) g.lane = "cheval";
     return { ok: true, grounded: g };
   }

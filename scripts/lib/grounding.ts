@@ -45,6 +45,8 @@ export interface GroundOpts {
   apiKey?: string;
   /** Executor MCP endpoint for code-mode; falls back to EXECUTOR_MCP_URL env. */
   executorUrl?: string;
+  /** Per-call transport timeout (ms). Default 30s. Bounds hung providers (BB MEDIUM-1). */
+  timeoutMs?: number;
   nowIso?: () => string;
 }
 
@@ -94,6 +96,8 @@ export const exaDirectTransport: GroundTransport = async (query, opts) => {
       numResults: opts.numResults ?? 8,
       contents: { text: { maxCharacters: 1200 } },
     }),
+    // BB MEDIUM-1: bound the call so a hung provider degrades promptly (→ Gemini fallback).
+    signal: AbortSignal.timeout(opts.timeoutMs ?? 30_000),
   });
   if (!res.ok) throw new GroundingError(res.status === 429 ? "RATE_LIMITED" : "PROVIDER_UNAVAILABLE", `exa ${res.status}`);
   const data = (await res.json()) as { results?: Array<Record<string, unknown>> };
@@ -119,6 +123,8 @@ export const executorCodeModeTransport: GroundTransport = async (query, opts) =>
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ mode: "code", tool: "exa_search", input: { query, numResults: opts.numResults ?? 8 } }),
+    // BB MEDIUM-1: bound the call so a hung sandbox degrades promptly (→ Gemini fallback).
+    signal: AbortSignal.timeout(opts.timeoutMs ?? 30_000),
   });
   if (!res.ok) throw new GroundingError(res.status === 429 ? "RATE_LIMITED" : "PROVIDER_UNAVAILABLE", `executor ${res.status}`);
   const data = (await res.json()) as { citations?: RawGrounding["citations"]; text?: string };

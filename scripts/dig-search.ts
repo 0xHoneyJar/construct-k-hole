@@ -164,7 +164,16 @@ const FORCE_REST = process.env.DIG_FORCE_REST === "1";
 // DIG_LANE=mcp to ground via the MCP lane (Exa/Executor) first, falling through to
 // Gemini (still grounded) if the MCP lane degrades. Runtime picks the MCP transport.
 const DIG_LANE = process.env.DIG_LANE || "gemini";
-const MCP_RUNTIME = (process.env.DIG_MCP_RUNTIME as GroundingRuntime) || "exa:direct";
+// BB HIGH-3: validate the runtime against the allowed set instead of a blind cast —
+// an unknown value must not silently select a transport with undefined provenance.
+const VALID_MCP_RUNTIMES: readonly GroundingRuntime[] = ["exa:direct", "executor:code-mode"];
+const MCP_RUNTIME: GroundingRuntime = (() => {
+  const v = process.env.DIG_MCP_RUNTIME;
+  if (!v) return "exa:direct";
+  if ((VALID_MCP_RUNTIMES as readonly string[]).includes(v)) return v as GroundingRuntime;
+  process.stderr.write(`[dig] Ignoring invalid DIG_MCP_RUNTIME='${v}'; using exa:direct.\n`);
+  return "exa:direct";
+})();
 
 mkdirSync(OUTPUT_DIR, { recursive: true });
 
@@ -564,12 +573,12 @@ async function geminiCall(
 }
 
 
-// ─── Gemini CLI fallback ─────────────────────────────────────────
-// When both OpenRouter and the REST API fail (e.g., 403 on REST,
-// no OpenRouter key configured), shell out to the gemini CLI which
-// uses a different auth chain (OAuth via service-account.json).
-// Loses grounding metadata — returns plain text only — but recovers
-// when the API path is dead.
+// ─── Gemini CLI (preferred subscription-auth path) ───────────────
+// The CLI (OAuth via ~/.gemini/settings.json) is tried FIRST; the REST API
+// (GEMINI_API_KEY) is the fallback when the CLI is unavailable or fails.
+// Loses grounding metadata — returns plain text only — but recovers when
+// the API path is dead. (BB LOW-1: OpenRouter references removed — that rung
+// was excised in Phase 2 #21.)
 
 
 // The gemini CLI binary. DIG_CLI_BIN overrides it — used by the test suite to
