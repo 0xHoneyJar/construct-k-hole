@@ -137,3 +137,9 @@ hounfour:
           pricing:
             input_per_mtok: 0
             output_per_mtok: 0
+
+# =============================================================================
+# Run Bridge — Autonomous Excellence Loop (enabled 2026-07-06 for khole-phase2)
+# =============================================================================
+run_bridge:
+  enabled: true
