@@ -110,37 +110,55 @@ Don't ask clarifying questions unless the thread is genuinely ambiguous. Trust t
 
 ### Step 2: Execute Focused Search (MANDATORY — script first)
 
-**You MUST run the dig-search script. This is not optional.** The script calls Gemini with Google Search grounding — it returns real URLs with provenance that cannot be replicated by other search tools. Do not skip this step. Do not substitute WebSearch or any other tool.
+**You MUST run the dig-search script. This is not optional.** Do not skip this step. Do not substitute WebSearch or any other tool.
 
-Run via Bash tool:
+**Grounding lane priority** (Phase 2 two-lane model, `#21`):
+
+1. **Executor MCP lane** (preferred — credentials live in Executor, no local key needed):
+```bash
+DIG_LANE=mcp DIG_MCP_RUNTIME=executor:code-mode npx tsx scripts/dig-search.ts --query "<thread>"
+```
+Requires `EXECUTOR_MCP_URL` set to the Executor MCP endpoint (e.g. `https://executor.sh/<org>/mcp`).
+
+> ⚠️ **Transport caveat (issue #28):** the `executor:code-mode` HTTP format has not been live-verified against executor.sh and is likely protocol-mismatched. Until #28 lands, the PROVEN Executor path is the in-session `mcp__executor__execute` alternative below; script-side, lanes 2–3 are the verified routes. The script falls through loudly either way.
+
+2. **Exa direct lane** (fallback if Executor is unreachable — needs `EXA_API_KEY` in env):
+```bash
+DIG_LANE=mcp npx tsx scripts/dig-search.ts --query "<thread>"
+```
+
+3. **Gemini lane** (fallback if full MCP lane degrades — existing behavior, Gemini CLI subscription or `GEMINI_API_KEY`):
 ```bash
 npx tsx scripts/dig-search.ts --query "<thread>"
 ```
 
-Common flag combinations:
+The script logs `[dig] MCP lane degraded (…)` to stderr on any MCP failure and automatically falls through to Gemini.
+
+**When spawning sub-agents for research**, include `DIG_LANE=mcp DIG_MCP_RUNTIME=executor:code-mode` in the Bash command prefix so subagents don't silently fall back to Gemini (issue #17).
+
+**In-session alternative** (when running as a Claude agent with Executor MCP tool access): use `mcp__executor__execute` with the `exa_search_api` integration directly instead of spawning the script as a subprocess.
+
+Common flag combinations (apply to any lane):
 ```bash
 # Chained dig (carries forward prior context)
-npx tsx scripts/dig-search.ts --query "<thread>" --trail scripts/research-output/dig-session-YYYY-MM-DD.md
+DIG_LANE=mcp DIG_MCP_RUNTIME=executor:code-mode npx tsx scripts/dig-search.ts --query "<thread>" --trail scripts/research-output/dig-session-YYYY-MM-DD.md
 
 # Deeper search (3-4 angles instead of 2)
-npx tsx scripts/dig-search.ts --query "<thread>" --depth 3
+DIG_LANE=mcp DIG_MCP_RUNTIME=executor:code-mode npx tsx scripts/dig-search.ts --query "<thread>" --depth 3
 
 # With explicit resonance profile
-npx tsx scripts/dig-search.ts --query "<thread>" --resonance resonance-profile.yaml
-
-# Override model
-npx tsx scripts/dig-search.ts --query "<thread>" --model gemini-2.5-pro
+DIG_LANE=mcp DIG_MCP_RUNTIME=executor:code-mode npx tsx scripts/dig-search.ts --query "<thread>" --resonance resonance-profile.yaml
 ```
 
 The script outputs **JSON to stdout** and progress to **stderr**. Parse the JSON — it contains:
-- `synthesis` — pre-synthesized findings from Gemini grounded search
+- `synthesis` — pre-synthesized findings
 - `sources` — deduplicated array of `{title, url}` objects
 - `trail_file` — path to the session trail (pass to `--trail` for chaining)
 - `used_fallback` — whether the model fell back from primary
 
 **Important**: Always pass `--trail` with the current session's trail file path for chained digs. This carries forward context so the synthesis builds on prior findings.
 
-**Fallback — ONLY after script failure:** If the script exits with an error (missing API key, all models unavailable, network down), the error JSON will explain why. Report the error to the user, then fall back to available web search tools. Never silently skip the script.
+**Fallback — ONLY after script failure:** If the script exits with an error (all lanes exhausted, network down), the error JSON will explain why. Report the error to the user, then fall back to available web search tools. Never silently skip the script.
 
 ### Step 3: Synthesize with Resonance
 
