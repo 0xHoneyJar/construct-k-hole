@@ -7,6 +7,9 @@ short_description: "Deep research + source synthesis"
 domain:
   - analytics
 author: 0xHoneyJar
+# Vendor repo for feedback routing (issue #14). Read by
+# .claude/scripts/construct-attribution.sh to route /feedback to this repo.
+source_repo: 0xHoneyJar/construct-k-hole
 license: MIT
 visibility: public
 skills:
